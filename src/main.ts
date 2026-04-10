@@ -4,6 +4,7 @@ import { MainMenuScene } from './scenes/MainMenuScene';
 import { GameScene } from './scenes/GameScene';
 import { HubScene } from './scenes/HubScene';
 import { GameOverScene } from './scenes/GameOverScene';
+import { VictoryScene } from './scenes/VictoryScene';
 import { GAME_WIDTH, GAME_HEIGHT } from './types';
 
 const config: Phaser.Types.Core.GameConfig = {
@@ -24,7 +25,14 @@ const config: Phaser.Types.Core.GameConfig = {
       height: 1536,
     },
   },
-  scene: [BootScene, MainMenuScene, GameScene, HubScene, GameOverScene],
+  scene: [
+    BootScene,
+    MainMenuScene,
+    GameScene,
+    HubScene,
+    GameOverScene,
+    VictoryScene,
+  ],
 };
 
 new Phaser.Game(config);
