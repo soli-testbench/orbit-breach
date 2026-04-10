@@ -1,11 +1,19 @@
 import Phaser from 'phaser';
-import { TileType, GameState, GAME_WIDTH, GAME_HEIGHT } from '../types';
+import {
+  TileType,
+  GameState,
+  UpgradeConfig,
+  GAME_WIDTH,
+  GAME_HEIGHT,
+} from '../types';
 import { GameMap } from '../map/GameMap';
 import { TEST_MAP } from '../data/maps';
 import { TOWER_CONFIGS } from '../data/towers';
 import { Tower } from '../towers/Tower';
 import { WaveManager } from '../systems/WaveManager';
 import { CombatSystem } from '../systems/CombatSystem';
+import { Enemy } from '../enemies/Enemy';
+import { UPGRADE_POOL } from '../data/upgrades';
 
 const INITIAL_ENERGY = 200;
 const INITIAL_REACTOR_HEALTH = 100;
@@ -31,6 +39,19 @@ export class GameScene extends Phaser.Scene {
   private waveBanner: Phaser.GameObjects.Container | null = null;
   private buttonPulseTween: Phaser.Tweens.Tween | null = null;
   private victoryTriggered: boolean = false;
+  private upgradeOverlay: Phaser.GameObjects.Container | null = null;
+  private upgradeHudTexts: Phaser.GameObjects.Text[] = [];
+  private awaitingUpgradeChoice: boolean = false;
+
+  private tileClickHandler!: (
+    pos: { col: number; row: number },
+    type: TileType,
+  ) => void;
+  private tileHoverHandler!: (
+    pos: { col: number; row: number },
+    _type: TileType,
+  ) => void;
+  private waveCompleteHandler!: (waveIndex: number) => void;
 
   constructor() {
     super({ key: 'GameScene' });
@@ -43,6 +64,12 @@ export class GameScene extends Phaser.Scene {
       maxReactorHealth: INITIAL_REACTOR_HEALTH,
       currentWave: 0,
       score: 0,
+      activeUpgrades: [],
+      damageModifier: 0,
+      fireRateModifier: 0,
+      rangeModifier: 0,
+      armorPiercing: 0,
+      salvageModifier: 0,
     };
 
     this.selectedTowerId = null;
@@ -52,6 +79,9 @@ export class GameScene extends Phaser.Scene {
     this.waveBanner = null;
     this.buttonPulseTween = null;
     this.victoryTriggered = false;
+    this.upgradeOverlay = null;
+    this.upgradeHudTexts = [];
+    this.awaitingUpgradeChoice = false;
 
     this.add
       .rectangle(
@@ -72,24 +102,21 @@ export class GameScene extends Phaser.Scene {
     this.createHUD();
     this.createTowerPanel();
 
-    this.events.on(
-      'tileClicked',
-      (pos: { col: number; row: number }, type: TileType) => {
-        this.handleTileClick(pos, type);
-      },
-    );
-
-    this.events.on(
-      'tileHover',
-      (pos: { col: number; row: number }, _type: TileType) => {
-        this.handleTileHover(pos);
-      },
-    );
-
-    this.events.on('waveComplete', (waveIndex: number) => {
+    this.tileClickHandler = (
+      pos: { col: number; row: number },
+      type: TileType,
+    ) => {
+      this.handleTileClick(pos, type);
+    };
+    this.tileHoverHandler = (
+      pos: { col: number; row: number },
+      _type: TileType,
+    ) => {
+      this.handleTileHover(pos);
+    };
+    this.waveCompleteHandler = (waveIndex: number) => {
       this.updateStartWaveButton(true);
       this.showWaveCompleteBanner(waveIndex);
-      this.startButtonPulse();
 
       if (!this.waveManager.hasMoreWaves && !this.victoryTriggered) {
         this.victoryTriggered = true;
@@ -103,27 +130,41 @@ export class GameScene extends Phaser.Scene {
             maxReactorHealth: this.gameState.maxReactorHealth,
           });
         });
+      } else if (this.waveManager.hasMoreWaves) {
+        this.showUpgradeSelection();
       }
-    });
+    };
+
+    this.events.on('tileClicked', this.tileClickHandler);
+    this.events.on('tileHover', this.tileHoverHandler);
+    this.events.on('waveComplete', this.waveCompleteHandler);
+  }
+
+  shutdown(): void {
+    this.events.off('tileClicked', this.tileClickHandler);
+    this.events.off('tileHover', this.tileHoverHandler);
+    this.events.off('waveComplete', this.waveCompleteHandler);
+    this.waveManager.cleanup();
+    this.combatSystem.cleanup();
   }
 
   update(time: number, delta: number): void {
     this.waveManager.update(delta);
 
-    this.combatSystem.update(time, delta, this.waveManager.activeEnemies);
+    const enemies = this.waveManager.activeEnemies;
+    this.combatSystem.update(time, delta, enemies as Enemy[], this.gameState);
 
-    // Grant rewards for killed enemies BEFORE removing dead/leaked
-    const activeEnemies = this.waveManager.activeEnemies;
-    for (let i = activeEnemies.length - 1; i >= 0; i--) {
-      const enemy = activeEnemies[i];
-      if (!enemy.alive && !enemy.reachedReactor) {
-        this.gameState.energy += enemy.config.salvageReward;
-        this.gameState.score += enemy.config.salvageReward;
-        activeEnemies.splice(i, 1);
-      }
+    // Harvest killed enemies for rewards
+    const killed = this.waveManager.harvestKilledEnemies();
+    for (const enemy of killed) {
+      const salvageMult = 1 + this.gameState.salvageModifier;
+      const reward = Math.round(enemy.config.salvageReward * salvageMult);
+      this.gameState.energy += reward;
+      this.gameState.score += reward;
     }
 
-    const leaked = this.waveManager.removeDeadAndLeaked();
+    // Remove leaked enemies and apply reactor damage
+    const leaked = this.waveManager.removeLeakedEnemies();
     for (const enemy of leaked) {
       this.gameState.reactorHealth -= REACTOR_DAMAGE_PER_ENEMY;
       enemy.destroy();
@@ -199,7 +240,11 @@ export class GameScene extends Phaser.Scene {
       .setDepth(51);
 
     this.startWaveButton.on('pointerdown', () => {
-      if (!this.waveManager.isWaveInProgress && this.waveManager.hasMoreWaves) {
+      if (
+        !this.waveManager.isWaveInProgress &&
+        this.waveManager.hasMoreWaves &&
+        !this.awaitingUpgradeChoice
+      ) {
         this.waveManager.startNextWave();
         this.gameState.currentWave = this.waveManager.currentWave;
         this.updateStartWaveButton(false);
@@ -330,6 +375,29 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
+  private wouldBlockAllPaths(col: number, row: number): boolean {
+    const originalType = this.gameMap.getTileType(col, row);
+    if (originalType === null) return true;
+
+    this.gameMap.setTileType(col, row, TileType.TOWER);
+
+    const airlocks = this.gameMap.getAirlocks();
+    const reactor = this.gameMap.getReactor();
+    let blocked = true;
+
+    if (reactor) {
+      for (const airlock of airlocks) {
+        if (this.gameMap.findPath(airlock, reactor) !== null) {
+          blocked = false;
+          break;
+        }
+      }
+    }
+
+    this.gameMap.setTileType(col, row, originalType);
+    return blocked;
+  }
+
   private handleTileClick(
     pos: { col: number; row: number },
     type: TileType,
@@ -349,6 +417,11 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
+    if (this.wouldBlockAllPaths(pos.col, pos.row)) {
+      this.showInvalidFeedback(pos, 'Cannot block path!');
+      return;
+    }
+
     const worldPos = this.gameMap.getTileWorldPosition(pos.col, pos.row);
     const tower = new Tower(
       this,
@@ -360,7 +433,7 @@ export class GameScene extends Phaser.Scene {
 
     this.combatSystem.addTower(tower);
     this.gameState.energy -= config.cost;
-    this.gameMap.setTileType(pos.col, pos.row, TileType.WALL);
+    this.gameMap.setTileType(pos.col, pos.row, TileType.TOWER);
     this.clearPlacementPreview();
   }
 
@@ -374,8 +447,12 @@ export class GameScene extends Phaser.Scene {
 
     const worldPos = this.gameMap.getTileWorldPosition(pos.col, pos.row);
     const tileType = this.gameMap.getTileType(pos.col, pos.row);
-    const isValid =
-      tileType === TileType.BUILDABLE && this.gameState.energy >= config.cost;
+    const isBuildable = tileType === TileType.BUILDABLE;
+    const canAfford = this.gameState.energy >= config.cost;
+    const wouldBlock = isBuildable
+      ? this.wouldBlockAllPaths(pos.col, pos.row)
+      : false;
+    const isValid = isBuildable && canAfford && !wouldBlock;
 
     this.placementPreview = this.add
       .rectangle(
@@ -447,11 +524,17 @@ export class GameScene extends Phaser.Scene {
 
   private updateStartWaveButton(enabled: boolean): void {
     this.stopButtonPulse();
-    if (enabled && this.waveManager.hasMoreWaves) {
+    if (this.awaitingUpgradeChoice) {
+      this.startWaveButton.setFillStyle(0x333300);
+      this.startWaveButton.setStrokeStyle(2, 0x666600);
+      this.startWaveLabel.setColor('#666600');
+      this.startWaveLabel.setText('CHOOSE UPGRADE');
+    } else if (enabled && this.waveManager.hasMoreWaves) {
       this.startWaveButton.setFillStyle(0x006600);
       this.startWaveButton.setStrokeStyle(2, 0x00ff00);
       this.startWaveLabel.setColor('#00ff00');
       this.startWaveLabel.setText('START WAVE');
+      this.startButtonPulse();
     } else if (!this.waveManager.hasMoreWaves) {
       this.startWaveButton.setFillStyle(0x333333);
       this.startWaveButton.setStrokeStyle(2, 0x666666);
@@ -554,6 +637,173 @@ export class GameScene extends Phaser.Scene {
     this.tweens.killTweensOf(this.startWaveLabel);
     this.startWaveButton.setScale(1);
     this.startWaveLabel.setScale(1);
+  }
+
+  private showUpgradeSelection(): void {
+    this.awaitingUpgradeChoice = true;
+    this.updateStartWaveButton(false);
+
+    // Pick 3 random upgrades without duplicates
+    const shuffled = [...UPGRADE_POOL].sort(() => Math.random() - 0.5);
+    const choices = shuffled.slice(0, 3);
+
+    const centerX = GAME_WIDTH / 2;
+    const centerY = GAME_HEIGHT / 2;
+
+    const overlay = this.add.container(0, 0).setDepth(200);
+
+    const dimBg = this.add
+      .rectangle(centerX, centerY, GAME_WIDTH, GAME_HEIGHT, 0x000000, 0.6)
+      .setDepth(200);
+    overlay.add(dimBg);
+
+    const titleText = this.add
+      .text(centerX, centerY - 130, 'CHOOSE AN UPGRADE', {
+        fontSize: '24px',
+        color: '#00ccff',
+        fontFamily: 'monospace',
+        fontStyle: 'bold',
+      })
+      .setOrigin(0.5)
+      .setDepth(201);
+    overlay.add(titleText);
+
+    const rarityColors: Record<string, string> = {
+      common: '#aaaaaa',
+      uncommon: '#44dd44',
+      rare: '#ff8800',
+    };
+
+    choices.forEach((upgrade, index) => {
+      const cardX = centerX + (index - 1) * 210;
+      const cardY = centerY + 20;
+
+      const cardBg = this.add
+        .rectangle(cardX, cardY, 190, 180, 0x112233, 0.95)
+        .setStrokeStyle(2, 0x00ccff)
+        .setInteractive({ useHandCursor: true })
+        .setDepth(201);
+      overlay.add(cardBg);
+
+      const nameText = this.add
+        .text(cardX, cardY - 60, upgrade.name, {
+          fontSize: '14px',
+          color: '#ffffff',
+          fontFamily: 'monospace',
+          fontStyle: 'bold',
+          align: 'center',
+          wordWrap: { width: 170 },
+        })
+        .setOrigin(0.5)
+        .setDepth(202);
+      overlay.add(nameText);
+
+      const descText = this.add
+        .text(cardX, cardY, upgrade.description, {
+          fontSize: '12px',
+          color: '#cccccc',
+          fontFamily: 'monospace',
+          align: 'center',
+          wordWrap: { width: 170 },
+        })
+        .setOrigin(0.5)
+        .setDepth(202);
+      overlay.add(descText);
+
+      const rarityText = this.add
+        .text(cardX, cardY + 50, upgrade.rarity.toUpperCase(), {
+          fontSize: '11px',
+          color: rarityColors[upgrade.rarity] || '#aaaaaa',
+          fontFamily: 'monospace',
+        })
+        .setOrigin(0.5)
+        .setDepth(202);
+      overlay.add(rarityText);
+
+      cardBg.on('pointerover', () => {
+        cardBg.setStrokeStyle(2, 0xffffff);
+      });
+      cardBg.on('pointerout', () => {
+        cardBg.setStrokeStyle(2, 0x00ccff);
+      });
+      cardBg.on('pointerdown', () => {
+        this.applyUpgrade(upgrade);
+        overlay.destroy();
+        this.upgradeOverlay = null;
+        this.awaitingUpgradeChoice = false;
+        this.updateStartWaveButton(true);
+        this.updateUpgradeHud();
+      });
+    });
+
+    this.upgradeOverlay = overlay;
+  }
+
+  private applyUpgrade(upgrade: UpgradeConfig): void {
+    this.gameState.activeUpgrades.push(upgrade);
+
+    switch (upgrade.effect.stat) {
+      case 'damage':
+        this.gameState.damageModifier += upgrade.effect.value;
+        break;
+      case 'fireRate':
+        this.gameState.fireRateModifier += upgrade.effect.value;
+        break;
+      case 'range':
+        this.gameState.rangeModifier += upgrade.effect.value;
+        break;
+      case 'energy':
+        this.gameState.energy += upgrade.effect.value;
+        break;
+      case 'armorPiercing':
+        this.gameState.armorPiercing += upgrade.effect.value;
+        break;
+      case 'reactorHealth': {
+        this.gameState.reactorHealth = Math.min(
+          this.gameState.reactorHealth + upgrade.effect.value,
+          this.gameState.maxReactorHealth,
+        );
+        break;
+      }
+      case 'salvage':
+        this.gameState.salvageModifier += upgrade.effect.value;
+        break;
+      case 'extraEnergy':
+        this.gameState.energy += upgrade.effect.value;
+        break;
+    }
+  }
+
+  private updateUpgradeHud(): void {
+    for (const t of this.upgradeHudTexts) {
+      t.destroy();
+    }
+    this.upgradeHudTexts = [];
+
+    const startY = GAME_HEIGHT - 70;
+    const x = 10;
+
+    if (this.gameState.activeUpgrades.length > 0) {
+      const header = this.add
+        .text(x, startY - 15, 'UPGRADES:', {
+          fontSize: '10px',
+          color: '#00ccff',
+          fontFamily: 'monospace',
+        })
+        .setDepth(51);
+      this.upgradeHudTexts.push(header);
+
+      this.gameState.activeUpgrades.forEach((u, i) => {
+        const text = this.add
+          .text(x, startY + i * 13, `- ${u.name}`, {
+            fontSize: '10px',
+            color: '#aaaaaa',
+            fontFamily: 'monospace',
+          })
+          .setDepth(51);
+        this.upgradeHudTexts.push(text);
+      });
+    }
   }
 
   private updateHUD(): void {

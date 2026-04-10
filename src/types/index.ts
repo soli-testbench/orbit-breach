@@ -6,6 +6,7 @@ export enum TileType {
   PATH = 'PATH',
   BUILDABLE = 'BUILDABLE',
   WALL = 'WALL',
+  TOWER = 'TOWER',
   AIRLOCK = 'AIRLOCK',
   REACTOR = 'REACTOR',
 }
@@ -87,6 +88,31 @@ export interface GameState {
   maxReactorHealth: number;
   currentWave: number;
   score: number;
+  activeUpgrades: UpgradeConfig[];
+  damageModifier: number;
+  fireRateModifier: number;
+  rangeModifier: number;
+  armorPiercing: number;
+  salvageModifier: number;
+}
+
+// =====================
+// Upgrade Types
+// =====================
+
+export type UpgradeRarity = 'common' | 'uncommon' | 'rare';
+
+export interface UpgradeEffect {
+  stat: string;
+  value: number;
+}
+
+export interface UpgradeConfig {
+  id: string;
+  name: string;
+  description: string;
+  rarity: UpgradeRarity;
+  effect: UpgradeEffect;
 }
 
 export const GAME_WIDTH = 1024;

@@ -11,6 +11,7 @@ const TILE_COLORS: Record<TileType, number> = {
   [TileType.PATH]: 0x334455,
   [TileType.BUILDABLE]: 0x225522,
   [TileType.WALL]: 0x222222,
+  [TileType.TOWER]: 0x222222,
   [TileType.AIRLOCK]: 0x0088ff,
   [TileType.REACTOR]: 0xff2200,
 };
