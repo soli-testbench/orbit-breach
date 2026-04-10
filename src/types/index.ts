@@ -32,6 +32,8 @@ export enum ProjectileType {
   LASER = 'LASER',
   MISSILE = 'MISSILE',
   PLASMA = 'PLASMA',
+  EMP = 'EMP',
+  GRAVITY = 'GRAVITY',
 }
 
 export interface TowerConfig {

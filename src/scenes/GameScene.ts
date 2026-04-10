@@ -28,6 +28,11 @@ export class GameScene extends Phaser.Scene {
   private placementPreview: Phaser.GameObjects.Rectangle | null = null;
   private rangePreview: Phaser.GameObjects.Arc | null = null;
 
+  // Task 5: Tower selling state
+  private selectedTower: Tower | null = null;
+  private sellOverlay: Phaser.GameObjects.Container | null = null;
+  private selectedTowerRangeCircle: Phaser.GameObjects.Arc | null = null;
+
   private energyText!: Phaser.GameObjects.Text;
   private waveText!: Phaser.GameObjects.Text;
   private reactorText!: Phaser.GameObjects.Text;
@@ -76,6 +81,9 @@ export class GameScene extends Phaser.Scene {
     this.placementPreview = null;
     this.rangePreview = null;
     this.invalidFeedback = null;
+    this.selectedTower = null;
+    this.sellOverlay = null;
+    this.selectedTowerRangeCircle = null;
     this.waveBanner = null;
     this.buttonPulseTween = null;
     this.victoryTriggered = false;
@@ -138,6 +146,13 @@ export class GameScene extends Phaser.Scene {
     this.events.on('tileClicked', this.tileClickHandler);
     this.events.on('tileHover', this.tileHoverHandler);
     this.events.on('waveComplete', this.waveCompleteHandler);
+
+    // Task 5: Escape key to deselect tower
+    this.input.keyboard?.on('keydown-ESC', () => {
+      if (this.selectedTower) {
+        this.deselectTower();
+      }
+    });
   }
 
   shutdown(): void {
@@ -375,6 +390,7 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
+  // Task 2: Check that ALL airlocks still have a valid path after hypothetical placement
   private wouldBlockAllPaths(col: number, row: number): boolean {
     const originalType = this.gameMap.getTileType(col, row);
     if (originalType === null) return true;
@@ -383,25 +399,41 @@ export class GameScene extends Phaser.Scene {
 
     const airlocks = this.gameMap.getAirlocks();
     const reactor = this.gameMap.getReactor();
-    let blocked = true;
+    let wouldBlockAny = false;
 
     if (reactor) {
       for (const airlock of airlocks) {
-        if (this.gameMap.findPath(airlock, reactor) !== null) {
-          blocked = false;
+        if (this.gameMap.findPath(airlock, reactor) === null) {
+          wouldBlockAny = true;
           break;
         }
       }
+    } else {
+      wouldBlockAny = true;
     }
 
     this.gameMap.setTileType(col, row, originalType);
-    return blocked;
+    return wouldBlockAny;
   }
 
   private handleTileClick(
     pos: { col: number; row: number },
     type: TileType,
   ): void {
+    // Task 5: If clicking a tower tile, select it for selling
+    if (type === TileType.TOWER) {
+      const tower = this.combatSystem.getTowerAt(pos.col, pos.row);
+      if (tower) {
+        this.selectTowerForSell(tower);
+        return;
+      }
+    }
+
+    // Task 5: Clicking elsewhere deselects the sell overlay
+    if (this.selectedTower) {
+      this.deselectTower();
+    }
+
     if (!this.selectedTowerId) return;
 
     const config = TOWER_CONFIGS[this.selectedTowerId];
@@ -418,7 +450,7 @@ export class GameScene extends Phaser.Scene {
     }
 
     if (this.wouldBlockAllPaths(pos.col, pos.row)) {
-      this.showInvalidFeedback(pos, 'Cannot block path!');
+      this.showInvalidFeedback(pos, 'Would block airlock path!');
       return;
     }
 
@@ -804,6 +836,93 @@ export class GameScene extends Phaser.Scene {
         this.upgradeHudTexts.push(text);
       });
     }
+  }
+
+  // Task 5: Select a tower and show sell UI
+  private selectTowerForSell(tower: Tower): void {
+    this.deselectTower();
+    this.selectedTower = tower;
+
+    const refundAmount = Math.ceil(tower.config.cost * 0.6);
+
+    // Show range circle
+    this.selectedTowerRangeCircle = this.add
+      .circle(tower.worldX, tower.worldY, tower.config.range, 0xffffff, 0.08)
+      .setStrokeStyle(1, 0xffffff, 0.3)
+      .setDepth(5);
+
+    // Create sell overlay
+    this.sellOverlay = this.add.container(0, 0).setDepth(100);
+
+    const bg = this.add
+      .rectangle(tower.worldX, tower.worldY - 45, 120, 50, 0x000000, 0.85)
+      .setStrokeStyle(1, 0xff4444);
+    this.sellOverlay.add(bg);
+
+    const nameText = this.add
+      .text(tower.worldX, tower.worldY - 57, tower.config.name, {
+        fontSize: '10px',
+        color: '#ffffff',
+        fontFamily: 'monospace',
+      })
+      .setOrigin(0.5)
+      .setDepth(101);
+    this.sellOverlay.add(nameText);
+
+    const sellBtn = this.add
+      .rectangle(tower.worldX, tower.worldY - 35, 100, 22, 0x660000)
+      .setStrokeStyle(1, 0xff2200)
+      .setInteractive({ useHandCursor: true })
+      .setDepth(101);
+    this.sellOverlay.add(sellBtn);
+
+    const sellLabel = this.add
+      .text(tower.worldX, tower.worldY - 35, `SELL (+${refundAmount}E)`, {
+        fontSize: '11px',
+        color: '#ff4444',
+        fontFamily: 'monospace',
+      })
+      .setOrigin(0.5)
+      .setDepth(102);
+    this.sellOverlay.add(sellLabel);
+
+    sellBtn.on('pointerover', () => sellBtn.setFillStyle(0x880000));
+    sellBtn.on('pointerout', () => sellBtn.setFillStyle(0x660000));
+    sellBtn.on('pointerdown', () => {
+      this.sellTower(tower, refundAmount);
+    });
+  }
+
+  // Task 5: Deselect tower and remove sell UI
+  private deselectTower(): void {
+    if (this.sellOverlay) {
+      this.sellOverlay.destroy();
+      this.sellOverlay = null;
+    }
+    if (this.selectedTowerRangeCircle) {
+      this.selectedTowerRangeCircle.destroy();
+      this.selectedTowerRangeCircle = null;
+    }
+    this.selectedTower = null;
+  }
+
+  // Task 5: Execute tower sell
+  private sellTower(tower: Tower, refundAmount: number): void {
+    // Refund energy
+    this.gameState.energy += refundAmount;
+
+    // Revert tile to buildable
+    this.gameMap.setTileType(
+      tower.gridPos.col,
+      tower.gridPos.row,
+      TileType.BUILDABLE,
+    );
+
+    // Remove tower from combat system (also destroys graphics)
+    this.combatSystem.removeTower(tower);
+
+    // Clear sell UI
+    this.deselectTower();
   }
 
   private updateHUD(): void {
