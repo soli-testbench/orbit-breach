@@ -16,6 +16,9 @@ export class WaveManager {
   private totalToSpawn: number = 0;
   private totalKilled: number = 0;
   private totalLeaked: number = 0;
+  private allTimersFired: boolean = false;
+  private safetyGraceTimer: number = 0;
+  private static readonly SAFETY_GRACE_MS = 3000;
 
   constructor(scene: Phaser.Scene, gameMap: GameMap) {
     this.scene = scene;
@@ -50,6 +53,21 @@ export class WaveManager {
     return this.enemies.filter((e) => e.isAlive()).length;
   }
 
+  // Task 1: Expose wave state counters for diagnostics
+  get waveState(): {
+    spawned: number;
+    killed: number;
+    leaked: number;
+    total: number;
+  } {
+    return {
+      spawned: this.totalSpawned,
+      killed: this.totalKilled,
+      leaked: this.totalLeaked,
+      total: this.totalToSpawn,
+    };
+  }
+
   startNextWave(): void {
     if (!this.hasMoreWaves || this.waveInProgress) return;
 
@@ -58,6 +76,8 @@ export class WaveManager {
     this.totalToSpawn = 0;
     this.totalKilled = 0;
     this.totalLeaked = 0;
+    this.allTimersFired = false;
+    this.safetyGraceTimer = 0;
 
     const waveConfig: WaveConfig = WAVE_CONFIGS[this.currentWaveIndex];
 
@@ -93,12 +113,26 @@ export class WaveManager {
     const reachableAirlocks = airlocks.filter(
       (a) => this.gameMap.findPath(a, reactor) !== null,
     );
-    if (reachableAirlocks.length === 0) return;
+    if (reachableAirlocks.length === 0) {
+      // Task 1: Decrement totalToSpawn when spawn fails to keep accounting balanced
+      this.totalToSpawn = Math.max(0, this.totalToSpawn - 1);
+      console.warn(
+        `[WaveManager] Spawn failed: no reachable airlocks. totalToSpawn adjusted to ${this.totalToSpawn}`,
+      );
+      return;
+    }
 
     const airlock =
       reachableAirlocks[Math.floor(Math.random() * reachableAirlocks.length)];
     const path = this.gameMap.findPath(airlock, reactor);
-    if (!path) return;
+    if (!path) {
+      // Task 1: Decrement totalToSpawn when spawn fails to keep accounting balanced
+      this.totalToSpawn = Math.max(0, this.totalToSpawn - 1);
+      console.warn(
+        `[WaveManager] Spawn failed: no valid path from airlock. totalToSpawn adjusted to ${this.totalToSpawn}`,
+      );
+      return;
+    }
 
     const startPos = this.gameMap.getTileWorldPosition(
       airlock.col,
@@ -150,6 +184,34 @@ export class WaveManager {
       if (allSpawned && allAccountedFor) {
         this.waveInProgress = false;
         this.scene.events.emit('waveComplete', this.currentWaveIndex);
+        return;
+      }
+
+      // Task 1: Track when all spawn timers have fired
+      if (
+        !this.allTimersFired &&
+        this.spawnTimers.length > 0 &&
+        this.spawnTimers.every((t) => t.hasDispatched)
+      ) {
+        this.allTimersFired = true;
+        this.safetyGraceTimer = 0;
+      }
+
+      // Task 1: Safety net - force-complete wave if stuck
+      if (this.allTimersFired) {
+        const anyAlive = this.enemies.some((e) => e.isAlive());
+        if (!anyAlive) {
+          this.safetyGraceTimer += delta;
+          if (this.safetyGraceTimer >= WaveManager.SAFETY_GRACE_MS) {
+            console.warn(
+              `[WaveManager] Safety net: force-completing wave. spawned=${this.totalSpawned}, killed=${this.totalKilled}, leaked=${this.totalLeaked}, total=${this.totalToSpawn}`,
+            );
+            this.waveInProgress = false;
+            this.scene.events.emit('waveComplete', this.currentWaveIndex);
+          }
+        } else {
+          this.safetyGraceTimer = 0;
+        }
       }
     }
   }

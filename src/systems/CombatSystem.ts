@@ -13,12 +13,17 @@ interface Projectile {
   damage: number;
   type: ProjectileType;
   alive: boolean;
+  armorPiercing: number; // Task 3: store armor piercing per projectile
 }
 
 export class CombatSystem {
   private scene: Phaser.Scene;
   private towers: Tower[] = [];
   private projectiles: Projectile[] = [];
+  private towerMap: Map<string, Tower> = new Map(); // Task 5: grid position to tower lookup
+
+  // Task 4: Gravity Well visual effects tracking
+  private gravityWellEffects: Map<Tower, Phaser.GameObjects.Arc> = new Map();
 
   constructor(scene: Phaser.Scene) {
     this.scene = scene;
@@ -26,6 +31,33 @@ export class CombatSystem {
 
   addTower(tower: Tower): void {
     this.towers.push(tower);
+    const key = `${tower.gridPos.col},${tower.gridPos.row}`;
+    this.towerMap.set(key, tower);
+  }
+
+  // Task 5: Remove a tower from the combat system
+  removeTower(tower: Tower): void {
+    const idx = this.towers.indexOf(tower);
+    if (idx !== -1) {
+      this.towers.splice(idx, 1);
+    }
+    const key = `${tower.gridPos.col},${tower.gridPos.row}`;
+    this.towerMap.delete(key);
+
+    // Clean up gravity well effect if applicable
+    const effect = this.gravityWellEffects.get(tower);
+    if (effect) {
+      effect.destroy();
+      this.gravityWellEffects.delete(tower);
+    }
+
+    tower.destroy();
+  }
+
+  // Task 5: Get tower at a grid position
+  getTowerAt(col: number, row: number): Tower | null {
+    const key = `${col},${row}`;
+    return this.towerMap.get(key) || null;
   }
 
   get allTowers(): Tower[] {
@@ -38,9 +70,35 @@ export class CombatSystem {
     enemies: Enemy[],
     gameState?: GameState,
   ): void {
+    // Task 4: Clear gravity slow on all enemies before reapplying
+    for (const enemy of enemies) {
+      if (enemy.isAlive()) {
+        enemy.clearGravitySlow();
+      }
+    }
+
     for (const tower of this.towers) {
       const rangeBonus = gameState ? 1 + gameState.rangeModifier : 1;
       const effectiveRange = tower.config.range * rangeBonus;
+
+      // Task 4: Handle Gravity Well passive area slow
+      if (tower.config.projectileType === ProjectileType.GRAVITY) {
+        this.updateGravityWell(tower, enemies, effectiveRange);
+        continue;
+      }
+
+      // Task 4: Handle EMP Tower area slow
+      if (tower.config.projectileType === ProjectileType.EMP) {
+        const fireRateBonus = gameState ? 1 + gameState.fireRateModifier : 1;
+        const effectiveFireRate = tower.config.fireRate / fireRateBonus;
+
+        if (time - tower.lastFireTime >= effectiveFireRate) {
+          tower.fire(time);
+          this.fireEMP(tower, enemies, effectiveRange);
+        }
+        continue;
+      }
+
       const target = tower.findTargetWithRange(enemies, effectiveRange);
 
       const fireRateBonus = gameState ? 1 + gameState.fireRateModifier : 1;
@@ -103,6 +161,7 @@ export class CombatSystem {
         damage: effectiveDamage,
         type,
         alive: true,
+        armorPiercing, // Task 3: store armor piercing on projectile
       });
     }
   }
@@ -122,7 +181,7 @@ export class CombatSystem {
       const dist = Math.sqrt(dx * dx + dy * dy);
 
       if (dist < 8) {
-        proj.target.takeDamage(proj.damage);
+        proj.target.takeDamage(proj.damage, proj.armorPiercing); // Task 3: pass armor piercing
         proj.alive = false;
         proj.graphics.destroy();
 
@@ -150,6 +209,76 @@ export class CombatSystem {
     this.projectiles = this.projectiles.filter((p) => p.alive);
   }
 
+  // Task 4: Handle EMP tower firing - area slow effect
+  private fireEMP(tower: Tower, enemies: Enemy[], range: number): void {
+    let hitCount = 0;
+    for (const enemy of enemies) {
+      if (!enemy.isAlive()) continue;
+      const dist = Phaser.Math.Distance.Between(
+        tower.worldX,
+        tower.worldY,
+        enemy.x,
+        enemy.y,
+      );
+      if (dist <= range) {
+        enemy.applySlow(0.5, 2000); // 50% slow for 2 seconds
+        hitCount++;
+      }
+    }
+
+    // Visual: electric arc effect
+    if (hitCount > 0) {
+      const arc = this.scene.add
+        .circle(tower.worldX, tower.worldY, range, 0x4488ff, 0.15)
+        .setStrokeStyle(2, 0x4488ff, 0.6)
+        .setDepth(20);
+      this.scene.tweens.add({
+        targets: arc,
+        alpha: 0,
+        scale: 1.2,
+        duration: 300,
+        onComplete: () => arc.destroy(),
+      });
+    }
+  }
+
+  // Task 4: Handle Gravity Well passive area slow
+  private updateGravityWell(
+    tower: Tower,
+    enemies: Enemy[],
+    range: number,
+  ): void {
+    // Create or update persistent visual effect
+    let effect = this.gravityWellEffects.get(tower);
+    if (!effect || !effect.active) {
+      effect = this.scene.add
+        .circle(tower.worldX, tower.worldY, range, 0x6600cc, 0.06)
+        .setStrokeStyle(1, 0x6600cc, 0.3)
+        .setDepth(5);
+      this.gravityWellEffects.set(tower, effect);
+    }
+
+    // Pulse the effect subtly
+    const pulse = 0.06 + Math.sin(this.scene.time.now / 500) * 0.02;
+    effect.setAlpha(pulse);
+
+    for (const enemy of enemies) {
+      if (!enemy.isAlive()) continue;
+      const dist = Phaser.Math.Distance.Between(
+        tower.worldX,
+        tower.worldY,
+        enemy.x,
+        enemy.y,
+      );
+      if (dist <= range) {
+        enemy.applyGravitySlow(0.3); // 30% slow while in range
+        // Low damage (5) applied per second - scaled by frame delta
+        const damagePerFrame = (5 * 16) / 1000; // ~5 damage per second at 60fps
+        enemy.takeDamage(damagePerFrame);
+      }
+    }
+  }
+
   cleanup(): void {
     for (const proj of this.projectiles) {
       proj.graphics.destroy();
@@ -159,5 +288,10 @@ export class CombatSystem {
       tower.destroy();
     }
     this.towers = [];
+    this.towerMap.clear();
+    for (const effect of this.gravityWellEffects.values()) {
+      effect.destroy();
+    }
+    this.gravityWellEffects.clear();
   }
 }
