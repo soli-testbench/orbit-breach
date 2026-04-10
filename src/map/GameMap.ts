@@ -65,12 +65,13 @@ export class GameMap {
           .setInteractive();
 
         rect.on('pointerdown', () => {
-          console.log(`Tile clicked: (${col}, ${row}) - Type: ${tileType}`);
-          this.scene.events.emit('tileClicked', { col, row }, tileType);
+          const currentType = this.getTileType(col, row);
+          this.scene.events.emit('tileClicked', { col, row }, currentType);
         });
 
         rect.on('pointerover', () => {
-          this.scene.events.emit('tileHover', { col, row }, tileType);
+          const currentType = this.getTileType(col, row);
+          this.scene.events.emit('tileHover', { col, row }, currentType);
         });
 
         this.tileGraphics[row][col] = rect;

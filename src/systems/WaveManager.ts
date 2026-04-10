@@ -36,6 +36,18 @@ export class WaveManager {
     return this.currentWaveIndex < WAVE_CONFIGS.length;
   }
 
+  get totalWaves(): number {
+    return WAVE_CONFIGS.length;
+  }
+
+  get totalEnemiesInWave(): number {
+    return this.totalToSpawn;
+  }
+
+  get remainingEnemies(): number {
+    return this.enemies.filter((e) => e.isAlive()).length;
+  }
+
   startNextWave(): void {
     if (!this.hasMoreWaves || this.waveInProgress) return;
 
