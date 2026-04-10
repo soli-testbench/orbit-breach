@@ -50,8 +50,12 @@ export class GameOverScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
-    this.createButton(centerX, centerY + 120, 'MAIN MENU', () => {
+    this.createButton(centerX - 130, centerY + 120, 'MAIN MENU', () => {
       this.scene.start('MainMenuScene');
+    });
+
+    this.createButton(centerX + 130, centerY + 120, 'PLAY AGAIN', () => {
+      this.scene.start('GameScene');
     });
   }
 

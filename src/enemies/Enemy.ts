@@ -106,8 +106,9 @@ export class Enemy {
     }
   }
 
-  takeDamage(damage: number): void {
-    const effectiveDamage = Math.max(1, damage - this.armor);
+  takeDamage(damage: number, armorPiercing: number = 0): void {
+    const effectiveArmor = Math.max(0, this.armor - armorPiercing);
+    const effectiveDamage = Math.max(1, damage - effectiveArmor);
     this.health -= effectiveDamage;
     if (this.health <= 0) {
       this.health = 0;

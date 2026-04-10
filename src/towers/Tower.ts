@@ -9,6 +9,7 @@ export class Tower {
   public worldX: number;
   public worldY: number;
   public sprite: Phaser.GameObjects.Rectangle;
+  public innerShape: Phaser.GameObjects.Rectangle;
   public rangeCircle: Phaser.GameObjects.Arc;
   public lastFireTime: number = 0;
   public target: Enemy | null = null;
@@ -32,7 +33,7 @@ export class Tower {
 
     // Add a small inner shape to distinguish tower types
     const innerSize = 10;
-    scene.add
+    this.innerShape = scene.add
       .rectangle(worldX, worldY, innerSize, innerSize, 0xffffff, 0.5)
       .setDepth(11);
 
@@ -52,7 +53,11 @@ export class Tower {
   }
 
   findTarget(enemies: Enemy[]): Enemy | null {
-    let nearestDist = this.config.range;
+    return this.findTargetWithRange(enemies, this.config.range);
+  }
+
+  findTargetWithRange(enemies: Enemy[], range: number): Enemy | null {
+    let nearestDist = range;
     let nearest: Enemy | null = null;
 
     for (const enemy of enemies) {
@@ -91,6 +96,7 @@ export class Tower {
 
   destroy(): void {
     this.sprite.destroy();
+    this.innerShape.destroy();
     this.rangeCircle.destroy();
   }
 }
