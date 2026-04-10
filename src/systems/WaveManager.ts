@@ -66,6 +66,8 @@ export class WaveManager {
   }
 
   private spawnEnemy(enemyId: string): void {
+    this.totalSpawned++;
+
     const config = ENEMY_CONFIGS[enemyId];
     if (!config) return;
 
@@ -73,7 +75,14 @@ export class WaveManager {
     const reactor = this.gameMap.getReactor();
     if (airlocks.length === 0 || !reactor) return;
 
-    const airlock = airlocks[Math.floor(Math.random() * airlocks.length)];
+    // Filter to airlocks that have a valid path to the reactor
+    const reachableAirlocks = airlocks.filter(
+      (a) => this.gameMap.findPath(a, reactor) !== null,
+    );
+    if (reachableAirlocks.length === 0) return;
+
+    const airlock =
+      reachableAirlocks[Math.floor(Math.random() * reachableAirlocks.length)];
     const path = this.gameMap.findPath(airlock, reactor);
     if (!path) return;
 
@@ -94,7 +103,6 @@ export class WaveManager {
     );
 
     this.enemies.push(enemy);
-    this.totalSpawned++;
   }
 
   update(delta: number): void {
