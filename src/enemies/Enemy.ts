@@ -13,6 +13,12 @@ export class Enemy {
   public alive: boolean = true;
   public reachedReactor: boolean = false;
 
+  // Slow mechanic fields (Task 4)
+  public slowFactor: number = 0;
+  public slowDuration: number = 0;
+  public slowTimer: number = 0;
+  public gravitySlowFactor: number = 0;
+
   private sprite: Phaser.GameObjects.Arc;
   private healthBarBg: Phaser.GameObjects.Rectangle;
   private healthBarFill: Phaser.GameObjects.Rectangle;
@@ -62,8 +68,34 @@ export class Enemy {
     return this.alive && !this.reachedReactor;
   }
 
+  applySlow(factor: number, duration: number): void {
+    if (factor > this.slowFactor) {
+      this.slowFactor = factor;
+    }
+    this.slowDuration = Math.max(this.slowDuration, duration);
+    this.slowTimer = this.slowDuration;
+  }
+
+  applyGravitySlow(factor: number): void {
+    this.gravitySlowFactor = factor;
+  }
+
+  clearGravitySlow(): void {
+    this.gravitySlowFactor = 0;
+  }
+
   update(delta: number): void {
     if (!this.alive || this.reachedReactor) return;
+
+    // Update slow timer
+    if (this.slowTimer > 0) {
+      this.slowTimer -= delta;
+      if (this.slowTimer <= 0) {
+        this.slowTimer = 0;
+        this.slowFactor = 0;
+        this.slowDuration = 0;
+      }
+    }
 
     if (this.pathIndex >= this.path.length) {
       this.reachedReactor = true;
@@ -85,7 +117,10 @@ export class Enemy {
       return;
     }
 
-    const moveAmount = (this.speed * delta) / 1000;
+    // Apply slow: use the stronger of timed slow and gravity slow
+    const effectiveSlow = Math.max(this.slowFactor, this.gravitySlowFactor);
+    const speedMultiplier = 1 - effectiveSlow;
+    const moveAmount = (this.speed * speedMultiplier * delta) / 1000;
     this.x += (dx / dist) * moveAmount;
     this.y += (dy / dist) * moveAmount;
 
@@ -104,6 +139,13 @@ export class Enemy {
     } else {
       this.healthBarFill.setFillStyle(0xff0000);
     }
+
+    // Tint sprite when slowed
+    if (effectiveSlow > 0) {
+      this.sprite.setAlpha(0.8);
+    } else {
+      this.sprite.setAlpha(1);
+    }
   }
 
   takeDamage(damage: number, armorPiercing: number = 0): void {
@@ -118,6 +160,7 @@ export class Enemy {
   }
 
   destroy(): void {
+    this.alive = false; // Task 1: ensure destroyed enemies are properly tracked
     this.sprite.destroy();
     this.healthBarBg.destroy();
     this.healthBarFill.destroy();
