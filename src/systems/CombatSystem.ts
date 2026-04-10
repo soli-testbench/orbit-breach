@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import { Tower } from '../towers/Tower';
 import { Enemy } from '../enemies/Enemy';
-import { ProjectileType } from '../types';
+import { ProjectileType, GameState } from '../types';
 
 interface Projectile {
   graphics: Phaser.GameObjects.Line | Phaser.GameObjects.Arc;
@@ -32,20 +32,38 @@ export class CombatSystem {
     return this.towers;
   }
 
-  update(time: number, delta: number, enemies: Enemy[]): void {
+  update(
+    time: number,
+    delta: number,
+    enemies: Enemy[],
+    gameState?: GameState,
+  ): void {
     for (const tower of this.towers) {
-      const target = tower.findTarget(enemies);
-      if (target && tower.canFire(time)) {
+      const rangeBonus = gameState ? 1 + gameState.rangeModifier : 1;
+      const effectiveRange = tower.config.range * rangeBonus;
+      const target = tower.findTargetWithRange(enemies, effectiveRange);
+
+      const fireRateBonus = gameState ? 1 + gameState.fireRateModifier : 1;
+      const effectiveFireRate = tower.config.fireRate / fireRateBonus;
+
+      if (target && time - tower.lastFireTime >= effectiveFireRate) {
         tower.fire(time);
-        this.fireProjectile(tower, target);
+        this.fireProjectile(tower, target, gameState);
       }
     }
 
     this.updateProjectiles(delta);
   }
 
-  private fireProjectile(tower: Tower, target: Enemy): void {
+  private fireProjectile(
+    tower: Tower,
+    target: Enemy,
+    gameState?: GameState,
+  ): void {
     const type = tower.config.projectileType;
+    const damageBonus = gameState ? 1 + gameState.damageModifier : 1;
+    const armorPiercing = gameState ? gameState.armorPiercing : 0;
+    const effectiveDamage = tower.config.damage * damageBonus;
 
     if (type === ProjectileType.LASER) {
       const line = this.scene.add
@@ -62,7 +80,7 @@ export class CombatSystem {
         .setDepth(20)
         .setAlpha(0.8);
 
-      target.takeDamage(tower.config.damage);
+      target.takeDamage(effectiveDamage, armorPiercing);
 
       this.scene.tweens.add({
         targets: line,
@@ -82,7 +100,7 @@ export class CombatSystem {
         x: tower.worldX,
         y: tower.worldY,
         speed: type === ProjectileType.MISSILE ? 300 : 400,
-        damage: tower.config.damage,
+        damage: effectiveDamage,
         type,
         alive: true,
       });

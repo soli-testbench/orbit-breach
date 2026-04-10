@@ -14,14 +14,16 @@ export class WaveManager {
   private spawnTimers: Phaser.Time.TimerEvent[] = [];
   private totalSpawned: number = 0;
   private totalToSpawn: number = 0;
+  private totalKilled: number = 0;
+  private totalLeaked: number = 0;
 
   constructor(scene: Phaser.Scene, gameMap: GameMap) {
     this.scene = scene;
     this.gameMap = gameMap;
   }
 
-  get activeEnemies(): Enemy[] {
-    return this.enemies;
+  get activeEnemies(): readonly Enemy[] {
+    return [...this.enemies];
   }
 
   get isWaveInProgress(): boolean {
@@ -54,6 +56,8 @@ export class WaveManager {
     this.waveInProgress = true;
     this.totalSpawned = 0;
     this.totalToSpawn = 0;
+    this.totalKilled = 0;
+    this.totalLeaked = 0;
 
     const waveConfig: WaveConfig = WAVE_CONFIGS[this.currentWaveIndex];
 
@@ -78,8 +82,6 @@ export class WaveManager {
   }
 
   private spawnEnemy(enemyId: string): void {
-    this.totalSpawned++;
-
     const config = ENEMY_CONFIGS[enemyId];
     if (!config) return;
 
@@ -115,6 +117,24 @@ export class WaveManager {
     );
 
     this.enemies.push(enemy);
+    this.totalSpawned++;
+  }
+
+  harvestKilledEnemies(): Enemy[] {
+    const killed: Enemy[] = [];
+    const remaining: Enemy[] = [];
+
+    for (const enemy of this.enemies) {
+      if (!enemy.alive && !enemy.reachedReactor) {
+        killed.push(enemy);
+        this.totalKilled++;
+      } else {
+        remaining.push(enemy);
+      }
+    }
+
+    this.enemies = remaining;
+    return killed;
   }
 
   update(delta: number): void {
@@ -124,9 +144,10 @@ export class WaveManager {
 
     if (this.waveInProgress) {
       const allSpawned = this.totalSpawned >= this.totalToSpawn;
-      const allDead = this.enemies.every((e) => !e.isAlive());
+      const allAccountedFor =
+        this.totalKilled + this.totalLeaked >= this.totalToSpawn;
 
-      if (allSpawned && allDead) {
+      if (allSpawned && allAccountedFor) {
         this.waveInProgress = false;
         this.scene.events.emit('waveComplete', this.currentWaveIndex);
       }
@@ -137,9 +158,10 @@ export class WaveManager {
     return this.enemies.filter((e) => e.reachedReactor && e.alive);
   }
 
-  removeDeadAndLeaked(): Enemy[] {
+  removeLeakedEnemies(): Enemy[] {
     const leaked = this.enemies.filter((e) => e.reachedReactor && e.alive);
-    this.enemies = this.enemies.filter((e) => e.isAlive());
+    this.enemies = this.enemies.filter((e) => !(e.reachedReactor && e.alive));
+    this.totalLeaked += leaked.length;
     return leaked;
   }
 
