@@ -27,6 +27,10 @@ export class GameScene extends Phaser.Scene {
   private startWaveLabel!: Phaser.GameObjects.Text;
   private towerButtons: Phaser.GameObjects.Container[] = [];
   private invalidFeedback: Phaser.GameObjects.Text | null = null;
+  private enemyText!: Phaser.GameObjects.Text;
+  private waveBanner: Phaser.GameObjects.Container | null = null;
+  private buttonPulseTween: Phaser.Tweens.Tween | null = null;
+  private victoryTriggered: boolean = false;
 
   constructor() {
     super({ key: 'GameScene' });
@@ -45,6 +49,9 @@ export class GameScene extends Phaser.Scene {
     this.placementPreview = null;
     this.rangePreview = null;
     this.invalidFeedback = null;
+    this.waveBanner = null;
+    this.buttonPulseTween = null;
+    this.victoryTriggered = false;
 
     this.add
       .rectangle(
@@ -79,22 +86,33 @@ export class GameScene extends Phaser.Scene {
       },
     );
 
-    this.events.on('waveComplete', () => {
+    this.events.on('waveComplete', (waveIndex: number) => {
       this.updateStartWaveButton(true);
+      this.showWaveCompleteBanner(waveIndex);
+      this.startButtonPulse();
+
+      if (!this.waveManager.hasMoreWaves && !this.victoryTriggered) {
+        this.victoryTriggered = true;
+        this.time.delayedCall(2000, () => {
+          this.waveManager.cleanup();
+          this.combatSystem.cleanup();
+          this.scene.start('VictoryScene', {
+            wave: this.gameState.currentWave,
+            score: this.gameState.score,
+            reactorHealth: this.gameState.reactorHealth,
+            maxReactorHealth: this.gameState.maxReactorHealth,
+          });
+        });
+      }
     });
   }
 
   update(time: number, delta: number): void {
     this.waveManager.update(delta);
 
-    const leaked = this.waveManager.removeDeadAndLeaked();
-    for (const enemy of leaked) {
-      this.gameState.reactorHealth -= REACTOR_DAMAGE_PER_ENEMY;
-      enemy.destroy();
-    }
-
     this.combatSystem.update(time, delta, this.waveManager.activeEnemies);
 
+    // Grant rewards for killed enemies BEFORE removing dead/leaked
     const activeEnemies = this.waveManager.activeEnemies;
     for (let i = activeEnemies.length - 1; i >= 0; i--) {
       const enemy = activeEnemies[i];
@@ -103,6 +121,12 @@ export class GameScene extends Phaser.Scene {
         this.gameState.score += enemy.config.salvageReward;
         activeEnemies.splice(i, 1);
       }
+    }
+
+    const leaked = this.waveManager.removeDeadAndLeaked();
+    for (const enemy of leaked) {
+      this.gameState.reactorHealth -= REACTOR_DAMAGE_PER_ENEMY;
+      enemy.destroy();
     }
 
     if (this.gameState.reactorHealth <= 0) {
@@ -148,6 +172,15 @@ export class GameScene extends Phaser.Scene {
         fontFamily: 'monospace',
       })
       .setOrigin(1, 0)
+      .setDepth(51);
+
+    this.enemyText = this.add
+      .text(GAME_WIDTH / 2 + 140, 6, '', {
+        fontSize: '16px',
+        color: '#ff8844',
+        fontFamily: 'monospace',
+      })
+      .setOrigin(0.5, 0)
       .setDepth(51);
 
     this.startWaveButton = this.add
@@ -413,6 +446,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private updateStartWaveButton(enabled: boolean): void {
+    this.stopButtonPulse();
     if (enabled && this.waveManager.hasMoreWaves) {
       this.startWaveButton.setFillStyle(0x006600);
       this.startWaveButton.setStrokeStyle(2, 0x00ff00);
@@ -431,14 +465,118 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  private showWaveCompleteBanner(waveIndex: number): void {
+    if (this.waveBanner) {
+      this.waveBanner.destroy();
+      this.waveBanner = null;
+    }
+
+    const centerX = GAME_WIDTH / 2;
+    const centerY = GAME_HEIGHT / 2;
+
+    const bg = this.add
+      .rectangle(centerX, centerY, 400, 80, 0x000000, 0.85)
+      .setStrokeStyle(2, 0x00ff88)
+      .setDepth(100);
+
+    const text = this.add
+      .text(centerX, centerY, `WAVE ${waveIndex} COMPLETE!`, {
+        fontSize: '28px',
+        color: '#00ff88',
+        fontFamily: 'monospace',
+        fontStyle: 'bold',
+      })
+      .setOrigin(0.5)
+      .setDepth(101);
+
+    this.waveBanner = this.add.container(0, 0, [bg, text]).setDepth(100);
+    this.waveBanner.setAlpha(0);
+
+    this.tweens.add({
+      targets: this.waveBanner,
+      alpha: 1,
+      duration: 300,
+      ease: 'Power2',
+    });
+
+    const dismissBanner = () => {
+      if (!this.waveBanner) return;
+      this.tweens.add({
+        targets: this.waveBanner,
+        alpha: 0,
+        duration: 300,
+        onComplete: () => {
+          if (this.waveBanner) {
+            this.waveBanner.destroy();
+            this.waveBanner = null;
+          }
+        },
+      });
+    };
+
+    bg.setInteractive({ useHandCursor: true });
+    bg.on('pointerdown', dismissBanner);
+
+    this.time.delayedCall(3000, dismissBanner);
+  }
+
+  private startButtonPulse(): void {
+    this.stopButtonPulse();
+    if (!this.waveManager.hasMoreWaves) return;
+
+    this.buttonPulseTween = this.tweens.add({
+      targets: this.startWaveButton,
+      scaleX: 1.08,
+      scaleY: 1.08,
+      duration: 500,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut',
+    });
+
+    this.tweens.add({
+      targets: this.startWaveLabel,
+      scaleX: 1.08,
+      scaleY: 1.08,
+      duration: 500,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut',
+    });
+  }
+
+  private stopButtonPulse(): void {
+    if (this.buttonPulseTween) {
+      this.buttonPulseTween.stop();
+      this.buttonPulseTween = null;
+    }
+    this.tweens.killTweensOf(this.startWaveButton);
+    this.tweens.killTweensOf(this.startWaveLabel);
+    this.startWaveButton.setScale(1);
+    this.startWaveLabel.setScale(1);
+  }
+
   private updateHUD(): void {
     this.energyText.setText('Energy: ' + this.gameState.energy);
-    this.waveText.setText('Wave: ' + this.gameState.currentWave);
+    this.waveText.setText(
+      'Wave: ' + this.gameState.currentWave + '/' + this.waveManager.totalWaves,
+    );
     this.reactorText.setText(
       'Reactor: ' +
         this.gameState.reactorHealth +
         '/' +
         this.gameState.maxReactorHealth,
     );
+
+    if (this.waveManager.isWaveInProgress) {
+      this.enemyText.setText(
+        'Enemies: ' +
+          this.waveManager.remainingEnemies +
+          '/' +
+          this.waveManager.totalEnemiesInWave,
+      );
+    } else {
+      this.enemyText.setText('');
+    }
   }
 }
