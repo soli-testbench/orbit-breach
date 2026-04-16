@@ -19,7 +19,8 @@ export class Enemy {
   public slowTimer: number = 0;
   public gravitySlowFactor: number = 0;
 
-  private sprite: Phaser.GameObjects.Arc;
+  // Procedural body rendering (Task 3): a container of shapes per enemy type
+  private body: Phaser.GameObjects.Container;
   private healthBarBg: Phaser.GameObjects.Rectangle;
   private healthBarFill: Phaser.GameObjects.Rectangle;
   private path: GridPosition[];
@@ -27,8 +28,11 @@ export class Enemy {
   private tileSize: number;
   private mapOffsetX: number;
   private mapOffsetY: number;
-  private isBoss: boolean;
+  public readonly isBoss: boolean;
   private healthBarWidth: number;
+  // Visual helpers for procedural body animation (Task 3)
+  private headingAngle: number = 0;
+  private pulseT: number = 0;
 
   constructor(
     scene: Phaser.Scene,
@@ -55,14 +59,8 @@ export class Enemy {
     this.isBoss = config.id === 'boss';
     this.healthBarWidth = this.isBoss ? 48 : 24;
 
-    this.sprite = scene.add
-      .circle(startX, startY, config.size, config.color)
-      .setDepth(15);
-
-    // Boss gets extra visual ring for distinction
-    if (this.isBoss) {
-      this.sprite.setStrokeStyle(3, 0xffd700, 0.9);
-    }
+    // Procedural multi-shape body per enemy type (Task 3)
+    this.body = this.buildProceduralBody(scene, startX, startY);
 
     this.healthBarBg = scene.add
       .rectangle(
@@ -150,7 +148,13 @@ export class Enemy {
     this.x += (dx / dist) * moveAmount;
     this.y += (dy / dist) * moveAmount;
 
-    this.sprite.setPosition(this.x, this.y);
+    // Heading for facing the body in the direction of travel
+    this.headingAngle = Math.atan2(dy, dx);
+    this.body.setPosition(this.x, this.y);
+    this.body.setRotation(this.headingAngle + Math.PI / 2);
+    this.pulseT += delta;
+    this.animateProceduralBody();
+
     this.healthBarBg.setPosition(this.x, this.y - this.config.size - 6);
     this.healthBarFill.setPosition(this.x, this.y - this.config.size - 6);
 
@@ -170,11 +174,170 @@ export class Enemy {
       this.healthBarFill.setFillStyle(0xff0000);
     }
 
-    // Tint sprite when slowed
-    if (effectiveSlow > 0) {
-      this.sprite.setAlpha(0.8);
-    } else {
-      this.sprite.setAlpha(1);
+    // Tint body when slowed
+    this.body.setAlpha(effectiveSlow > 0 ? 0.8 : 1);
+  }
+
+  // Task 3: Build distinct multi-shape composition per enemy type using
+  // Phaser Graphics primitives. Shapes are added to a container positioned
+  // at the enemy's world coordinates so we can rotate/animate them together.
+  private buildProceduralBody(
+    scene: Phaser.Scene,
+    startX: number,
+    startY: number,
+  ): Phaser.GameObjects.Container {
+    const container = scene.add.container(startX, startY).setDepth(15);
+    const color = this.config.color;
+    const size = this.config.size;
+
+    switch (this.config.id) {
+      case 'scout': {
+        // Diamond/arrow shape pointing forward (up in local space)
+        const hull = scene.add.polygon(
+          0,
+          0,
+          [
+            0,
+            -size,
+            size * 0.7,
+            size * 0.6,
+            0,
+            size * 0.3,
+            -size * 0.7,
+            size * 0.6,
+          ],
+          color,
+        );
+        hull.setStrokeStyle(1, 0xffffff, 0.5);
+        // Engine trail indicator behind (below in local space)
+        const trail = scene.add.ellipse(
+          0,
+          size * 0.7,
+          size * 0.6,
+          size * 0.9,
+          0xff8844,
+          0.7,
+        );
+        trail.setName('trail');
+        container.add([trail, hull]);
+        break;
+      }
+      case 'brute': {
+        // Hexagonal hull
+        const hexPts: number[] = [];
+        for (let i = 0; i < 6; i++) {
+          const a = (i / 6) * Math.PI * 2 - Math.PI / 2;
+          hexPts.push(Math.cos(a) * size, Math.sin(a) * size);
+        }
+        const hull = scene.add.polygon(0, 0, hexPts, color);
+        hull.setStrokeStyle(2, 0x880000, 1);
+        // Shield ring (outer stroked circle)
+        const shield = scene.add.circle(0, 0, size + 4, 0xffaa00, 0);
+        shield.setStrokeStyle(2, 0xffaa00, 0.5);
+        shield.setName('shield');
+        // Inner core
+        const core = scene.add.circle(0, 0, size * 0.35, 0xffffff, 0.9);
+        container.add([shield, hull, core]);
+        break;
+      }
+      case 'carrier': {
+        // Elongated capsule shape (taller than wide) with cargo panels
+        const hull = scene.add.ellipse(0, 0, size * 1.3, size * 2.2, color);
+        hull.setStrokeStyle(1, 0xaa8800, 0.9);
+        const panelL = scene.add.rectangle(
+          -size * 0.45,
+          0,
+          size * 0.35,
+          size * 1.3,
+          0x886600,
+          0.9,
+        );
+        const panelR = scene.add.rectangle(
+          size * 0.45,
+          0,
+          size * 0.35,
+          size * 1.3,
+          0x886600,
+          0.9,
+        );
+        const bridge = scene.add.rectangle(
+          0,
+          -size * 0.5,
+          size * 0.5,
+          size * 0.4,
+          0xffffaa,
+          0.9,
+        );
+        container.add([hull, panelL, panelR, bridge]);
+        break;
+      }
+      case 'boss': {
+        // Multi-layered polygon: outer octagon, inner polygon, glowing core,
+        // orbiting particle dots
+        const octPts: number[] = [];
+        for (let i = 0; i < 8; i++) {
+          const a = (i / 8) * Math.PI * 2 - Math.PI / 2;
+          octPts.push(Math.cos(a) * size, Math.sin(a) * size);
+        }
+        const outer = scene.add.polygon(0, 0, octPts, color);
+        outer.setStrokeStyle(3, 0xffd700, 0.9);
+        const inner = scene.add.polygon(
+          0,
+          0,
+          octPts.map((v) => v * 0.6),
+          0x660066,
+        );
+        inner.setStrokeStyle(2, 0xff66ff, 0.9);
+        const core = scene.add.circle(0, 0, size * 0.35, 0xffffff, 1);
+        core.setName('core');
+        // Orbiting particles (decorative)
+        const p1 = scene.add.circle(size + 4, 0, 3, 0xffd700, 1);
+        const p2 = scene.add.circle(-size - 4, 0, 3, 0xffd700, 1);
+        const p3 = scene.add.circle(0, size + 4, 3, 0xffd700, 1);
+        const p4 = scene.add.circle(0, -size - 4, 3, 0xffd700, 1);
+        p1.setName('p');
+        p2.setName('p');
+        p3.setName('p');
+        p4.setName('p');
+        container.add([outer, inner, core, p1, p2, p3, p4]);
+        // Boss spawn: screen shake effect (preserved from previous version)
+        scene.cameras.main.shake(400, 0.01);
+        break;
+      }
+      default: {
+        // Fallback: simple circle
+        const hull = scene.add.circle(0, 0, size, color);
+        container.add(hull);
+      }
+    }
+    return container;
+  }
+
+  // Subtle per-frame animation of visual sub-elements without affecting
+  // gameplay. Scout's engine trail flickers, brute's shield ring pulses,
+  // boss's core pulses.
+  private animateProceduralBody(): void {
+    const flicker = 0.6 + Math.sin(this.pulseT / 60) * 0.25;
+    for (const child of this.body.list) {
+      const named = child as Phaser.GameObjects.GameObject & {
+        name?: string;
+        setAlpha?: (n: number) => unknown;
+        setScale?: (x: number, y?: number) => unknown;
+      };
+      if (named.name === 'trail' && named.setAlpha) {
+        named.setAlpha(flicker);
+      }
+      if (named.name === 'shield' && named.setScale) {
+        const s = 1 + Math.sin(this.pulseT / 400) * 0.08;
+        named.setScale(s, s);
+      }
+      if (named.name === 'core' && named.setScale) {
+        const s = 1 + Math.sin(this.pulseT / 200) * 0.15;
+        named.setScale(s, s);
+      }
+      if (named.name === 'p' && named.setAlpha) {
+        named.setAlpha(0.6 + Math.sin(this.pulseT / 150) * 0.4);
+      }
     }
   }
 
@@ -191,7 +354,7 @@ export class Enemy {
 
   destroy(): void {
     this.alive = false;
-    this.sprite.destroy();
+    this.body.destroy();
     this.healthBarBg.destroy();
     this.healthBarFill.destroy();
   }

@@ -24,6 +24,17 @@ export class CombatSystem {
 
   // Task 4: Gravity Well visual effects tracking
   private gravityWellEffects: Map<Tower, Phaser.GameObjects.Arc> = new Map();
+  // Task 1: Gravity Well tick accumulator per tower (ms). Damage is applied
+  // in discrete ticks so the armor floor in takeDamage() is respected at the
+  // intended DPS rather than per-frame.
+  private gravityWellTickTimers: Map<Tower, number> = new Map();
+  private static readonly GRAVITY_TICK_INTERVAL_MS = 1000;
+  private static readonly GRAVITY_DAMAGE_PER_TICK = 5;
+
+  // Task 5: internal scaled clock (accumulates delta passed in by the
+  // scene, which may already be scaled by the speed multiplier). All tower
+  // fire-rate comparisons use this clock so fire cadence also scales.
+  private scaledTime: number = 0;
 
   constructor(scene: Phaser.Scene) {
     this.scene = scene;
@@ -50,6 +61,7 @@ export class CombatSystem {
       effect.destroy();
       this.gravityWellEffects.delete(tower);
     }
+    this.gravityWellTickTimers.delete(tower);
 
     tower.destroy();
   }
@@ -65,11 +77,17 @@ export class CombatSystem {
   }
 
   update(
-    time: number,
+    _time: number,
     delta: number,
     enemies: Enemy[],
     gameState?: GameState,
   ): void {
+    // Advance scaled clock (delta is already multiplied by game speed in
+    // the scene). Using this internal clock for fire-rate checks ensures
+    // tower cadence scales proportionally with game speed (Task 5).
+    this.scaledTime += delta;
+    const now = this.scaledTime;
+
     // Task 4: Clear gravity slow on all enemies before reapplying
     for (const enemy of enemies) {
       if (enemy.isAlive()) {
@@ -78,6 +96,9 @@ export class CombatSystem {
     }
 
     for (const tower of this.towers) {
+      // Task 3: per-frame visual animation (pulses, barrel aim, etc.)
+      tower.updateVisual(delta);
+
       const rangeBonus = gameState ? 1 + gameState.rangeModifier : 1;
       const effectiveRange = tower.config.range * rangeBonus;
 
@@ -92,8 +113,8 @@ export class CombatSystem {
         const fireRateBonus = gameState ? 1 + gameState.fireRateModifier : 1;
         const effectiveFireRate = tower.config.fireRate / fireRateBonus;
 
-        if (time - tower.lastFireTime >= effectiveFireRate) {
-          tower.fire(time);
+        if (now - tower.lastFireTime >= effectiveFireRate) {
+          tower.fire(now);
           this.fireEMP(tower, enemies, effectiveRange);
         }
         continue;
@@ -104,8 +125,8 @@ export class CombatSystem {
       const fireRateBonus = gameState ? 1 + gameState.fireRateModifier : 1;
       const effectiveFireRate = tower.config.fireRate / fireRateBonus;
 
-      if (target && time - tower.lastFireTime >= effectiveFireRate) {
-        tower.fire(time);
+      if (target && now - tower.lastFireTime >= effectiveFireRate) {
+        tower.fire(now);
         this.fireProjectile(tower, target, gameState);
       }
     }
@@ -303,6 +324,19 @@ export class CombatSystem {
     effect.setAlpha(pulse);
     effect.setScale(scalePulse);
 
+    // Task 1: Accumulate elapsed time and apply damage in discrete ticks
+    // (once per GRAVITY_TICK_INTERVAL_MS). Per-frame damage application used
+    // to deal ~60 DPS because takeDamage()'s Math.max(1, ...) floor rounded
+    // fractional (~0.08) damage up to 1 every frame. Ticking preserves the
+    // armor-vs-damage calculation so armored enemies properly reduce damage.
+    const prevTick = this.gravityWellTickTimers.get(tower) ?? 0;
+    const newTick = prevTick + delta;
+    const shouldTick = newTick >= CombatSystem.GRAVITY_TICK_INTERVAL_MS;
+    this.gravityWellTickTimers.set(
+      tower,
+      shouldTick ? newTick - CombatSystem.GRAVITY_TICK_INTERVAL_MS : newTick,
+    );
+
     let hasTargets = false;
     for (const enemy of enemies) {
       if (!enemy.isAlive()) continue;
@@ -315,9 +349,9 @@ export class CombatSystem {
       if (dist <= range) {
         hasTargets = true;
         enemy.applyGravitySlow(0.3); // 30% slow while in range
-        // Low damage (5) applied per second - scaled by frame delta
-        const damagePerFrame = (5 * delta) / 1000; // 5 damage per second, frame-rate independent
-        enemy.takeDamage(damagePerFrame);
+        if (shouldTick) {
+          enemy.takeDamage(CombatSystem.GRAVITY_DAMAGE_PER_TICK);
+        }
 
         // Visual: periodic gravitational pull lines toward tower
         if (Math.random() < 0.08) {
