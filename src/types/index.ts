@@ -96,6 +96,9 @@ export interface GameState {
   rangeModifier: number;
   armorPiercing: number;
   salvageModifier: number;
+  towerDiscount: number;
+  extraEnergy: number;
+  bossSalvageBonus: number;
 }
 
 // =====================
