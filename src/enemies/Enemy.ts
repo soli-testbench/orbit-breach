@@ -126,30 +126,59 @@ export class Enemy {
       return;
     }
 
-    const targetPos = this.path[this.pathIndex];
-    const targetX =
-      this.mapOffsetX + targetPos.col * this.tileSize + this.tileSize / 2;
-    const targetY =
-      this.mapOffsetY + targetPos.row * this.tileSize + this.tileSize / 2;
-
-    const dx = targetX - this.x;
-    const dy = targetY - this.y;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-
-    if (dist < 2) {
-      this.pathIndex++;
-      return;
-    }
-
     // Apply slow: use the stronger of timed slow and gravity slow
     const effectiveSlow = Math.max(this.slowFactor, this.gravitySlowFactor);
     const speedMultiplier = 1 - effectiveSlow;
-    const moveAmount = (this.speed * speedMultiplier * delta) / 1000;
-    this.x += (dx / dist) * moveAmount;
-    this.y += (dy / dist) * moveAmount;
+    let remaining = (this.speed * speedMultiplier * delta) / 1000;
+
+    // Advance along the path, consuming the full move distance across
+    // multiple waypoints if necessary. At higher game speeds (2x/3x) a
+    // single tick's move can exceed the distance to the next waypoint;
+    // previously this caused units to overshoot and oscillate around a
+    // waypoint (getting "stuck"). Snapping to the waypoint and carrying
+    // the remainder into the next segment fixes this at any speed/delta.
+    let lastDx = 0;
+    let lastDy = 0;
+    while (remaining > 0 && this.pathIndex < this.path.length) {
+      const targetPos = this.path[this.pathIndex];
+      const targetX =
+        this.mapOffsetX + targetPos.col * this.tileSize + this.tileSize / 2;
+      const targetY =
+        this.mapOffsetY + targetPos.row * this.tileSize + this.tileSize / 2;
+
+      const dx = targetX - this.x;
+      const dy = targetY - this.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+
+      if (dist <= remaining) {
+        // Snap to the waypoint to avoid overshoot, then carry remaining
+        // distance to the next segment.
+        this.x = targetX;
+        this.y = targetY;
+        remaining -= dist;
+        this.pathIndex++;
+        if (dx !== 0 || dy !== 0) {
+          lastDx = dx;
+          lastDy = dy;
+        }
+      } else {
+        this.x += (dx / dist) * remaining;
+        this.y += (dy / dist) * remaining;
+        lastDx = dx;
+        lastDy = dy;
+        remaining = 0;
+      }
+    }
+
+    if (this.pathIndex >= this.path.length) {
+      this.reachedReactor = true;
+      return;
+    }
 
     // Heading for facing the body in the direction of travel
-    this.headingAngle = Math.atan2(dy, dx);
+    if (lastDx !== 0 || lastDy !== 0) {
+      this.headingAngle = Math.atan2(lastDy, lastDx);
+    }
     this.body.setPosition(this.x, this.y);
     this.body.setRotation(this.headingAngle + Math.PI / 2);
     this.pulseT += delta;
