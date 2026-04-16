@@ -27,6 +27,8 @@ export class Enemy {
   private tileSize: number;
   private mapOffsetX: number;
   private mapOffsetY: number;
+  private isBoss: boolean;
+  private healthBarWidth: number;
 
   constructor(
     scene: Phaser.Scene,
@@ -50,18 +52,42 @@ export class Enemy {
     this.tileSize = tileSize;
     this.mapOffsetX = mapOffsetX;
     this.mapOffsetY = mapOffsetY;
+    this.isBoss = config.id === 'boss';
+    this.healthBarWidth = this.isBoss ? 48 : 24;
 
     this.sprite = scene.add
       .circle(startX, startY, config.size, config.color)
       .setDepth(15);
 
+    // Boss gets extra visual ring for distinction
+    if (this.isBoss) {
+      this.sprite.setStrokeStyle(3, 0xffd700, 0.9);
+    }
+
     this.healthBarBg = scene.add
-      .rectangle(startX, startY - config.size - 6, 24, 4, 0x333333)
+      .rectangle(
+        startX,
+        startY - config.size - 6,
+        this.healthBarWidth,
+        this.isBoss ? 6 : 4,
+        0x333333,
+      )
       .setDepth(16);
 
     this.healthBarFill = scene.add
-      .rectangle(startX, startY - config.size - 6, 24, 4, 0x00ff00)
+      .rectangle(
+        startX,
+        startY - config.size - 6,
+        this.healthBarWidth,
+        this.isBoss ? 6 : 4,
+        this.isBoss ? 0xff00ff : 0x00ff00,
+      )
       .setDepth(17);
+
+    // Boss spawn: screen shake effect
+    if (this.isBoss) {
+      scene.cameras.main.shake(400, 0.01);
+    }
   }
 
   isAlive(): boolean {
@@ -130,9 +156,13 @@ export class Enemy {
 
     const healthPercent = this.health / this.maxHealth;
     this.healthBarFill.setScale(healthPercent, 1);
-    this.healthBarFill.x = this.x - (24 * (1 - healthPercent)) / 2;
+    this.healthBarFill.x =
+      this.x - (this.healthBarWidth * (1 - healthPercent)) / 2;
 
-    if (healthPercent > 0.5) {
+    if (this.isBoss) {
+      // Boss always uses magenta health bar
+      this.healthBarFill.setFillStyle(0xff00ff);
+    } else if (healthPercent > 0.5) {
       this.healthBarFill.setFillStyle(0x00ff00);
     } else if (healthPercent > 0.25) {
       this.healthBarFill.setFillStyle(0xffff00);
@@ -160,7 +190,7 @@ export class Enemy {
   }
 
   destroy(): void {
-    this.alive = false; // Task 1: ensure destroyed enemies are properly tracked
+    this.alive = false;
     this.sprite.destroy();
     this.healthBarBg.destroy();
     this.healthBarFill.destroy();
