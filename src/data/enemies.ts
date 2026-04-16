@@ -34,4 +34,15 @@ export const ENEMY_CONFIGS: Record<string, EnemyConfig> = {
     size: 12,
     description: 'Medium transport vessel',
   },
+  boss: {
+    id: 'boss',
+    name: 'Overlord Dreadnought',
+    health: 1000,
+    speed: 30,
+    armor: 20,
+    salvageReward: 200,
+    color: 0xff00ff,
+    size: 24,
+    description: 'Massive command vessel with heavy armor plating',
+  },
 };

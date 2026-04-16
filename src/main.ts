@@ -13,16 +13,17 @@ const config: Phaser.Types.Core.GameConfig = {
   height: GAME_HEIGHT,
   parent: 'game-container',
   backgroundColor: '#000000',
+  roundPixels: true,
   scale: {
     mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH,
     min: {
-      width: 512,
-      height: 384,
+      width: 640,
+      height: 360,
     },
     max: {
-      width: 2048,
-      height: 1536,
+      width: 3840,
+      height: 2160,
     },
   },
   scene: [
