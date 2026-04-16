@@ -41,4 +41,50 @@ export const WAVE_CONFIGS: WaveConfig[] = [
     ],
     delayBetweenGroups: 1000,
   },
+  {
+    waveNumber: 6,
+    groups: [
+      { enemyId: 'carrier', count: 8, spawnDelay: 600 },
+      { enemyId: 'brute', count: 6, spawnDelay: 700 },
+      { enemyId: 'scout', count: 12, spawnDelay: 350 },
+    ],
+    delayBetweenGroups: 800,
+  },
+  {
+    waveNumber: 7,
+    groups: [
+      { enemyId: 'brute', count: 8, spawnDelay: 600 },
+      { enemyId: 'carrier', count: 8, spawnDelay: 500 },
+      { enemyId: 'scout', count: 15, spawnDelay: 300 },
+    ],
+    delayBetweenGroups: 700,
+  },
+  {
+    waveNumber: 8,
+    groups: [
+      { enemyId: 'scout', count: 20, spawnDelay: 250 },
+      { enemyId: 'brute', count: 10, spawnDelay: 500 },
+      { enemyId: 'carrier', count: 8, spawnDelay: 500 },
+    ],
+    delayBetweenGroups: 600,
+  },
+  {
+    waveNumber: 9,
+    groups: [
+      { enemyId: 'brute', count: 12, spawnDelay: 400 },
+      { enemyId: 'carrier', count: 10, spawnDelay: 400 },
+      { enemyId: 'scout', count: 20, spawnDelay: 200 },
+    ],
+    delayBetweenGroups: 500,
+  },
+  {
+    waveNumber: 10,
+    groups: [
+      { enemyId: 'scout', count: 10, spawnDelay: 300 },
+      { enemyId: 'brute', count: 6, spawnDelay: 500 },
+      { enemyId: 'boss', count: 1, spawnDelay: 0 },
+      { enemyId: 'carrier', count: 8, spawnDelay: 400 },
+    ],
+    delayBetweenGroups: 1000,
+  },
 ];

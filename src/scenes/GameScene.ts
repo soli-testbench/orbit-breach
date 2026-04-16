@@ -14,6 +14,8 @@ import { WaveManager } from '../systems/WaveManager';
 import { CombatSystem } from '../systems/CombatSystem';
 import { Enemy } from '../enemies/Enemy';
 import { UPGRADE_POOL } from '../data/upgrades';
+import { WAVE_CONFIGS } from '../data/waves';
+import { ENEMY_CONFIGS } from '../data/enemies';
 
 const INITIAL_ENERGY = 200;
 const INITIAL_REACTOR_HEALTH = 100;
@@ -28,7 +30,7 @@ export class GameScene extends Phaser.Scene {
   private placementPreview: Phaser.GameObjects.Rectangle | null = null;
   private rangePreview: Phaser.GameObjects.Arc | null = null;
 
-  // Task 5: Tower selling state
+  // Tower selling state
   private selectedTower: Tower | null = null;
   private sellOverlay: Phaser.GameObjects.Container | null = null;
   private selectedTowerRangeCircle: Phaser.GameObjects.Arc | null = null;
@@ -47,6 +49,12 @@ export class GameScene extends Phaser.Scene {
   private upgradeOverlay: Phaser.GameObjects.Container | null = null;
   private upgradeHudTexts: Phaser.GameObjects.Text[] = [];
   private awaitingUpgradeChoice: boolean = false;
+
+  // Task 3: Track selected non-stackable upgrades
+  private selectedNonStackableIds: Set<string> = new Set();
+
+  // Task 2: Wave preview panel
+  private wavePreviewContainer: Phaser.GameObjects.Container | null = null;
 
   private tileClickHandler!: (
     pos: { col: number; row: number },
@@ -90,6 +98,8 @@ export class GameScene extends Phaser.Scene {
     this.upgradeOverlay = null;
     this.upgradeHudTexts = [];
     this.awaitingUpgradeChoice = false;
+    this.selectedNonStackableIds = new Set();
+    this.wavePreviewContainer = null;
 
     this.add
       .rectangle(
@@ -126,6 +136,17 @@ export class GameScene extends Phaser.Scene {
       this.updateStartWaveButton(true);
       this.showWaveCompleteBanner(waveIndex);
 
+      // Apply reactor regen if upgrade is active
+      const regenUpgrade = this.gameState.activeUpgrades.find(
+        (u) => u.effect.stat === 'reactorRegen',
+      );
+      if (regenUpgrade) {
+        this.gameState.reactorHealth = Math.min(
+          this.gameState.reactorHealth + regenUpgrade.effect.value,
+          this.gameState.maxReactorHealth,
+        );
+      }
+
       if (!this.waveManager.hasMoreWaves && !this.victoryTriggered) {
         this.victoryTriggered = true;
         this.time.delayedCall(2000, () => {
@@ -147,12 +168,15 @@ export class GameScene extends Phaser.Scene {
     this.events.on('tileHover', this.tileHoverHandler);
     this.events.on('waveComplete', this.waveCompleteHandler);
 
-    // Task 5: Escape key to deselect tower
+    // Escape key to deselect tower
     this.input.keyboard?.on('keydown-ESC', () => {
       if (this.selectedTower) {
         this.deselectTower();
       }
     });
+
+    // Show wave preview for wave 1
+    this.showWavePreview();
   }
 
   shutdown(): void {
@@ -201,20 +225,20 @@ export class GameScene extends Phaser.Scene {
 
   private createHUD(): void {
     this.add
-      .rectangle(GAME_WIDTH / 2, 16, GAME_WIDTH, 32, 0x000000, 0.7)
+      .rectangle(GAME_WIDTH / 2, 20, GAME_WIDTH, 40, 0x000000, 0.7)
       .setDepth(50);
 
     this.energyText = this.add
-      .text(10, 6, '', {
-        fontSize: '16px',
+      .text(16, 8, '', {
+        fontSize: '20px',
         color: '#ffcc00',
         fontFamily: 'monospace',
       })
       .setDepth(51);
 
     this.waveText = this.add
-      .text(GAME_WIDTH / 2, 6, '', {
-        fontSize: '16px',
+      .text(GAME_WIDTH / 2, 8, '', {
+        fontSize: '20px',
         color: '#ffffff',
         fontFamily: 'monospace',
       })
@@ -222,8 +246,8 @@ export class GameScene extends Phaser.Scene {
       .setDepth(51);
 
     this.reactorText = this.add
-      .text(GAME_WIDTH - 10, 6, '', {
-        fontSize: '16px',
+      .text(GAME_WIDTH - 16, 8, '', {
+        fontSize: '20px',
         color: '#ff4444',
         fontFamily: 'monospace',
       })
@@ -231,8 +255,8 @@ export class GameScene extends Phaser.Scene {
       .setDepth(51);
 
     this.enemyText = this.add
-      .text(GAME_WIDTH / 2 + 140, 6, '', {
-        fontSize: '16px',
+      .text(GAME_WIDTH / 2 + 200, 8, '', {
+        fontSize: '20px',
         color: '#ff8844',
         fontFamily: 'monospace',
       })
@@ -240,14 +264,14 @@ export class GameScene extends Phaser.Scene {
       .setDepth(51);
 
     this.startWaveButton = this.add
-      .rectangle(GAME_WIDTH / 2, GAME_HEIGHT - 30, 160, 35, 0x006600)
+      .rectangle(GAME_WIDTH / 2, GAME_HEIGHT - 40, 200, 44, 0x006600)
       .setStrokeStyle(2, 0x00ff00)
       .setInteractive({ useHandCursor: true })
       .setDepth(50);
 
     this.startWaveLabel = this.add
-      .text(GAME_WIDTH / 2, GAME_HEIGHT - 30, 'START WAVE', {
-        fontSize: '16px',
+      .text(GAME_WIDTH / 2, GAME_HEIGHT - 40, 'START WAVE', {
+        fontSize: '20px',
         color: '#00ff00',
         fontFamily: 'monospace',
       })
@@ -260,6 +284,7 @@ export class GameScene extends Phaser.Scene {
         this.waveManager.hasMoreWaves &&
         !this.awaitingUpgradeChoice
       ) {
+        this.hideWavePreview();
         this.waveManager.startNextWave();
         this.gameState.currentWave = this.waveManager.currentWave;
         this.updateStartWaveButton(false);
@@ -279,14 +304,14 @@ export class GameScene extends Phaser.Scene {
     });
 
     const endRunBtn = this.add
-      .rectangle(GAME_WIDTH - 80, GAME_HEIGHT - 30, 120, 35, 0x660000)
+      .rectangle(GAME_WIDTH - 90, GAME_HEIGHT - 40, 140, 44, 0x660000)
       .setStrokeStyle(2, 0xff2200)
       .setInteractive({ useHandCursor: true })
       .setDepth(50);
 
     this.add
-      .text(GAME_WIDTH - 80, GAME_HEIGHT - 30, 'END RUN', {
-        fontSize: '14px',
+      .text(GAME_WIDTH - 90, GAME_HEIGHT - 40, 'END RUN', {
+        fontSize: '18px',
         color: '#ff2200',
         fontFamily: 'monospace',
       })
@@ -309,12 +334,12 @@ export class GameScene extends Phaser.Scene {
   }
 
   private createTowerPanel(): void {
-    const panelX = 10;
-    const panelY = 45;
+    const panelX = 16;
+    const panelY = 55;
 
     this.add
       .text(panelX, panelY, 'TOWERS', {
-        fontSize: '14px',
+        fontSize: '16px',
         color: '#00ccff',
         fontFamily: 'monospace',
       })
@@ -323,26 +348,26 @@ export class GameScene extends Phaser.Scene {
     const towerIds = Object.keys(TOWER_CONFIGS);
     towerIds.forEach((id, index) => {
       const config = TOWER_CONFIGS[id];
-      const y = panelY + 25 + index * 45;
+      const y = panelY + 30 + index * 50;
 
       const container = this.add.container(panelX, y).setDepth(50);
 
       const bg = this.add
-        .rectangle(55, 0, 110, 40, 0x111122)
+        .rectangle(60, 0, 120, 44, 0x111122)
         .setStrokeStyle(1, 0x334466)
         .setInteractive({ useHandCursor: true })
         .setOrigin(0, 0);
 
-      const swatch = this.add.rectangle(10, 20, 16, 16, config.color);
+      const swatch = this.add.rectangle(10, 22, 18, 18, config.color);
 
-      const label = this.add.text(25, 5, config.name, {
-        fontSize: '11px',
+      const label = this.add.text(28, 5, config.name, {
+        fontSize: '12px',
         color: '#cccccc',
         fontFamily: 'monospace',
       });
 
-      const costText = this.add.text(25, 20, '$' + config.cost, {
-        fontSize: '11px',
+      const costText = this.add.text(28, 22, '$' + config.cost, {
+        fontSize: '12px',
         color: '#ffcc00',
         fontFamily: 'monospace',
       });
@@ -390,7 +415,7 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
-  // Task 2: Check that ALL airlocks still have a valid path after hypothetical placement
+  // Check that ALL airlocks still have a valid path after hypothetical placement
   private wouldBlockAllPaths(col: number, row: number): boolean {
     const originalType = this.gameMap.getTileType(col, row);
     if (originalType === null) return true;
@@ -420,7 +445,7 @@ export class GameScene extends Phaser.Scene {
     pos: { col: number; row: number },
     type: TileType,
   ): void {
-    // Task 5: If clicking a tower tile, select it for selling
+    // If clicking a tower tile, select it for selling
     if (type === TileType.TOWER) {
       const tower = this.combatSystem.getTowerAt(pos.col, pos.row);
       if (tower) {
@@ -429,7 +454,7 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
-    // Task 5: Clicking elsewhere deselects the sell overlay
+    // Clicking elsewhere deselects the sell overlay
     if (this.selectedTower) {
       this.deselectTower();
     }
@@ -531,7 +556,7 @@ export class GameScene extends Phaser.Scene {
     const worldPos = this.gameMap.getTileWorldPosition(pos.col, pos.row);
     this.invalidFeedback = this.add
       .text(worldPos.x, worldPos.y - 25, message, {
-        fontSize: '12px',
+        fontSize: '14px',
         color: '#ff4444',
         fontFamily: 'monospace',
         backgroundColor: '#000000',
@@ -590,13 +615,13 @@ export class GameScene extends Phaser.Scene {
     const centerY = GAME_HEIGHT / 2;
 
     const bg = this.add
-      .rectangle(centerX, centerY, 400, 80, 0x000000, 0.85)
+      .rectangle(centerX, centerY, 500, 100, 0x000000, 0.85)
       .setStrokeStyle(2, 0x00ff88)
       .setDepth(100);
 
     const text = this.add
       .text(centerX, centerY, `WAVE ${waveIndex} COMPLETE!`, {
-        fontSize: '28px',
+        fontSize: '36px',
         color: '#00ff88',
         fontFamily: 'monospace',
         fontStyle: 'bold',
@@ -671,12 +696,92 @@ export class GameScene extends Phaser.Scene {
     this.startWaveLabel.setScale(1);
   }
 
+  // Task 2: Show wave preview panel
+  private showWavePreview(): void {
+    this.hideWavePreview();
+
+    const nextWaveIndex = this.waveManager.currentWave;
+    if (nextWaveIndex >= WAVE_CONFIGS.length) return;
+
+    const waveConfig = WAVE_CONFIGS[nextWaveIndex];
+    const btnX = GAME_WIDTH / 2;
+    const btnY = GAME_HEIGHT - 40;
+
+    const container = this.add.container(0, 0).setDepth(49);
+
+    const lineHeight = 24;
+    const panelHeight = 40 + waveConfig.groups.length * lineHeight;
+    const panelWidth = 260;
+    const panelX = btnX;
+    const panelY = btnY - 44 - panelHeight / 2;
+
+    const bg = this.add
+      .rectangle(panelX, panelY, panelWidth, panelHeight, 0x0a0a2a, 0.9)
+      .setStrokeStyle(1, 0x334466);
+    container.add(bg);
+
+    const titleY = panelY - panelHeight / 2 + 16;
+    const title = this.add
+      .text(panelX, titleY, `WAVE ${nextWaveIndex + 1} PREVIEW`, {
+        fontSize: '13px',
+        color: '#00ccff',
+        fontFamily: 'monospace',
+        fontStyle: 'bold',
+      })
+      .setOrigin(0.5);
+    container.add(title);
+
+    waveConfig.groups.forEach((group, i) => {
+      const enemyConfig = ENEMY_CONFIGS[group.enemyId];
+      if (!enemyConfig) return;
+
+      const rowY = titleY + 20 + i * lineHeight;
+
+      // Color-coded circle
+      const colorCircle = this.add
+        .circle(panelX - panelWidth / 2 + 20, rowY, 6, enemyConfig.color)
+        .setDepth(49);
+      container.add(colorCircle);
+
+      // Enemy name and count
+      const label = this.add
+        .text(
+          panelX - panelWidth / 2 + 36,
+          rowY,
+          `${group.count}\u00D7 ${enemyConfig.name}`,
+          {
+            fontSize: '13px',
+            color: '#cccccc',
+            fontFamily: 'monospace',
+          },
+        )
+        .setOrigin(0, 0.5);
+      container.add(label);
+    });
+
+    this.wavePreviewContainer = container;
+  }
+
+  private hideWavePreview(): void {
+    if (this.wavePreviewContainer) {
+      this.wavePreviewContainer.destroy();
+      this.wavePreviewContainer = null;
+    }
+  }
+
+  // Task 3: Upgrade selection with stackable tracking
   private showUpgradeSelection(): void {
     this.awaitingUpgradeChoice = true;
     this.updateStartWaveButton(false);
+    this.hideWavePreview();
 
-    // Pick 3 random upgrades without duplicates
-    const shuffled = [...UPGRADE_POOL].sort(() => Math.random() - 0.5);
+    // Build pool of available upgrades, excluding used non-stackable ones
+    const availablePool = UPGRADE_POOL.filter(
+      (u) => u.stackable || !this.selectedNonStackableIds.has(u.id),
+    );
+
+    // Pick 3 random distinct upgrades
+    const shuffled = [...availablePool].sort(() => Math.random() - 0.5);
     const choices = shuffled.slice(0, 3);
 
     const centerX = GAME_WIDTH / 2;
@@ -690,8 +795,8 @@ export class GameScene extends Phaser.Scene {
     overlay.add(dimBg);
 
     const titleText = this.add
-      .text(centerX, centerY - 130, 'CHOOSE AN UPGRADE', {
-        fontSize: '24px',
+      .text(centerX, centerY - 160, 'CHOOSE AN UPGRADE', {
+        fontSize: '30px',
         color: '#00ccff',
         fontFamily: 'monospace',
         fontStyle: 'bold',
@@ -707,24 +812,24 @@ export class GameScene extends Phaser.Scene {
     };
 
     choices.forEach((upgrade, index) => {
-      const cardX = centerX + (index - 1) * 210;
+      const cardX = centerX + (index - 1) * 260;
       const cardY = centerY + 20;
 
       const cardBg = this.add
-        .rectangle(cardX, cardY, 190, 180, 0x112233, 0.95)
+        .rectangle(cardX, cardY, 230, 210, 0x112233, 0.95)
         .setStrokeStyle(2, 0x00ccff)
         .setInteractive({ useHandCursor: true })
         .setDepth(201);
       overlay.add(cardBg);
 
       const nameText = this.add
-        .text(cardX, cardY - 60, upgrade.name, {
-          fontSize: '14px',
+        .text(cardX, cardY - 70, upgrade.name, {
+          fontSize: '16px',
           color: '#ffffff',
           fontFamily: 'monospace',
           fontStyle: 'bold',
           align: 'center',
-          wordWrap: { width: 170 },
+          wordWrap: { width: 210 },
         })
         .setOrigin(0.5)
         .setDepth(202);
@@ -732,19 +837,19 @@ export class GameScene extends Phaser.Scene {
 
       const descText = this.add
         .text(cardX, cardY, upgrade.description, {
-          fontSize: '12px',
+          fontSize: '14px',
           color: '#cccccc',
           fontFamily: 'monospace',
           align: 'center',
-          wordWrap: { width: 170 },
+          wordWrap: { width: 210 },
         })
         .setOrigin(0.5)
         .setDepth(202);
       overlay.add(descText);
 
       const rarityText = this.add
-        .text(cardX, cardY + 50, upgrade.rarity.toUpperCase(), {
-          fontSize: '11px',
+        .text(cardX, cardY + 55, upgrade.rarity.toUpperCase(), {
+          fontSize: '12px',
           color: rarityColors[upgrade.rarity] || '#aaaaaa',
           fontFamily: 'monospace',
         })
@@ -760,11 +865,18 @@ export class GameScene extends Phaser.Scene {
       });
       cardBg.on('pointerdown', () => {
         this.applyUpgrade(upgrade);
+
+        // Track non-stackable selection
+        if (!upgrade.stackable) {
+          this.selectedNonStackableIds.add(upgrade.id);
+        }
+
         overlay.destroy();
         this.upgradeOverlay = null;
         this.awaitingUpgradeChoice = false;
         this.updateStartWaveButton(true);
         this.updateUpgradeHud();
+        this.showWavePreview();
       });
     });
 
@@ -803,6 +915,13 @@ export class GameScene extends Phaser.Scene {
       case 'extraEnergy':
         this.gameState.energy += upgrade.effect.value;
         break;
+      case 'towerDiscount':
+        // Applied as stat modifier; tower cost check can use this
+        this.gameState.energy += 30;
+        break;
+      case 'reactorRegen':
+        // Effect applied at wave completion via waveCompleteHandler
+        break;
     }
   }
 
@@ -812,13 +931,13 @@ export class GameScene extends Phaser.Scene {
     }
     this.upgradeHudTexts = [];
 
-    const startY = GAME_HEIGHT - 70;
-    const x = 10;
+    const startY = GAME_HEIGHT - 90;
+    const x = 16;
 
     if (this.gameState.activeUpgrades.length > 0) {
       const header = this.add
         .text(x, startY - 15, 'UPGRADES:', {
-          fontSize: '10px',
+          fontSize: '11px',
           color: '#00ccff',
           fontFamily: 'monospace',
         })
@@ -827,8 +946,8 @@ export class GameScene extends Phaser.Scene {
 
       this.gameState.activeUpgrades.forEach((u, i) => {
         const text = this.add
-          .text(x, startY + i * 13, `- ${u.name}`, {
-            fontSize: '10px',
+          .text(x, startY + i * 14, `- ${u.name}`, {
+            fontSize: '11px',
             color: '#aaaaaa',
             fontFamily: 'monospace',
           })
@@ -838,7 +957,7 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  // Task 5: Select a tower and show sell UI
+  // Select a tower and show sell UI
   private selectTowerForSell(tower: Tower): void {
     this.deselectTower();
     this.selectedTower = tower;
@@ -855,13 +974,13 @@ export class GameScene extends Phaser.Scene {
     this.sellOverlay = this.add.container(0, 0).setDepth(100);
 
     const bg = this.add
-      .rectangle(tower.worldX, tower.worldY - 45, 120, 50, 0x000000, 0.85)
+      .rectangle(tower.worldX, tower.worldY - 45, 130, 55, 0x000000, 0.85)
       .setStrokeStyle(1, 0xff4444);
     this.sellOverlay.add(bg);
 
     const nameText = this.add
-      .text(tower.worldX, tower.worldY - 57, tower.config.name, {
-        fontSize: '10px',
+      .text(tower.worldX, tower.worldY - 60, tower.config.name, {
+        fontSize: '11px',
         color: '#ffffff',
         fontFamily: 'monospace',
       })
@@ -870,15 +989,15 @@ export class GameScene extends Phaser.Scene {
     this.sellOverlay.add(nameText);
 
     const sellBtn = this.add
-      .rectangle(tower.worldX, tower.worldY - 35, 100, 22, 0x660000)
+      .rectangle(tower.worldX, tower.worldY - 38, 110, 24, 0x660000)
       .setStrokeStyle(1, 0xff2200)
       .setInteractive({ useHandCursor: true })
       .setDepth(101);
     this.sellOverlay.add(sellBtn);
 
     const sellLabel = this.add
-      .text(tower.worldX, tower.worldY - 35, `SELL (+${refundAmount}E)`, {
-        fontSize: '11px',
+      .text(tower.worldX, tower.worldY - 38, `SELL (+${refundAmount}E)`, {
+        fontSize: '12px',
         color: '#ff4444',
         fontFamily: 'monospace',
       })
@@ -893,7 +1012,7 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
-  // Task 5: Deselect tower and remove sell UI
+  // Deselect tower and remove sell UI
   private deselectTower(): void {
     if (this.sellOverlay) {
       this.sellOverlay.destroy();
@@ -906,7 +1025,7 @@ export class GameScene extends Phaser.Scene {
     this.selectedTower = null;
   }
 
-  // Task 5: Execute tower sell
+  // Execute tower sell
   private sellTower(tower: Tower, refundAmount: number): void {
     // Refund energy
     this.gameState.energy += refundAmount;

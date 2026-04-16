@@ -83,7 +83,7 @@ export class CombatSystem {
 
       // Task 4: Handle Gravity Well passive area slow
       if (tower.config.projectileType === ProjectileType.GRAVITY) {
-        this.updateGravityWell(tower, enemies, effectiveRange);
+        this.updateGravityWell(tower, enemies, effectiveRange, delta);
         continue;
       }
 
@@ -226,19 +226,57 @@ export class CombatSystem {
       }
     }
 
-    // Visual: electric arc effect
+    // Visual: EMP pulse ring expanding outward
+    const pulseRing = this.scene.add
+      .circle(tower.worldX, tower.worldY, 10, 0x4488ff, 0)
+      .setStrokeStyle(3, 0x4488ff, 0.9)
+      .setDepth(20);
+    this.scene.tweens.add({
+      targets: pulseRing,
+      scaleX: range / 10,
+      scaleY: range / 10,
+      alpha: 0,
+      duration: 400,
+      ease: 'Cubic.easeOut',
+      onComplete: () => pulseRing.destroy(),
+    });
+
+    // Visual: inner flash on the tower itself
+    const flash = this.scene.add
+      .circle(tower.worldX, tower.worldY, 18, 0x88ccff, 0.7)
+      .setDepth(21);
+    this.scene.tweens.add({
+      targets: flash,
+      alpha: 0,
+      scale: 0.3,
+      duration: 250,
+      onComplete: () => flash.destroy(),
+    });
+
+    // Visual: lightning arcs to hit enemies
     if (hitCount > 0) {
-      const arc = this.scene.add
-        .circle(tower.worldX, tower.worldY, range, 0x4488ff, 0.15)
-        .setStrokeStyle(2, 0x4488ff, 0.6)
-        .setDepth(20);
-      this.scene.tweens.add({
-        targets: arc,
-        alpha: 0,
-        scale: 1.2,
-        duration: 300,
-        onComplete: () => arc.destroy(),
-      });
+      for (const enemy of enemies) {
+        if (!enemy.isAlive()) continue;
+        const dist = Phaser.Math.Distance.Between(
+          tower.worldX,
+          tower.worldY,
+          enemy.x,
+          enemy.y,
+        );
+        if (dist <= range) {
+          const line = this.scene.add
+            .line(0, 0, tower.worldX, tower.worldY, enemy.x, enemy.y, 0x4488ff)
+            .setOrigin(0, 0)
+            .setAlpha(0.6)
+            .setDepth(20);
+          this.scene.tweens.add({
+            targets: line,
+            alpha: 0,
+            duration: 200,
+            onComplete: () => line.destroy(),
+          });
+        }
+      }
     }
   }
 
@@ -247,6 +285,7 @@ export class CombatSystem {
     tower: Tower,
     enemies: Enemy[],
     range: number,
+    delta: number,
   ): void {
     // Create or update persistent visual effect
     let effect = this.gravityWellEffects.get(tower);
@@ -258,10 +297,13 @@ export class CombatSystem {
       this.gravityWellEffects.set(tower, effect);
     }
 
-    // Pulse the effect subtly
-    const pulse = 0.06 + Math.sin(this.scene.time.now / 500) * 0.02;
+    // Pulse the effect with gravitational distortion animation
+    const pulse = 0.06 + Math.sin(this.scene.time.now / 500) * 0.03;
+    const scalePulse = 1.0 + Math.sin(this.scene.time.now / 800) * 0.05;
     effect.setAlpha(pulse);
+    effect.setScale(scalePulse);
 
+    let hasTargets = false;
     for (const enemy of enemies) {
       if (!enemy.isAlive()) continue;
       const dist = Phaser.Math.Distance.Between(
@@ -271,11 +313,43 @@ export class CombatSystem {
         enemy.y,
       );
       if (dist <= range) {
+        hasTargets = true;
         enemy.applyGravitySlow(0.3); // 30% slow while in range
         // Low damage (5) applied per second - scaled by frame delta
-        const damagePerFrame = (5 * 16) / 1000; // ~5 damage per second at 60fps
+        const damagePerFrame = (5 * delta) / 1000; // 5 damage per second, frame-rate independent
         enemy.takeDamage(damagePerFrame);
+
+        // Visual: periodic gravitational pull lines toward tower
+        if (Math.random() < 0.08) {
+          const pullLine = this.scene.add
+            .line(0, 0, enemy.x, enemy.y, tower.worldX, tower.worldY, 0x9933ff)
+            .setOrigin(0, 0)
+            .setAlpha(0.4)
+            .setDepth(19);
+          this.scene.tweens.add({
+            targets: pullLine,
+            alpha: 0,
+            duration: 300,
+            onComplete: () => pullLine.destroy(),
+          });
+        }
       }
+    }
+
+    // Visual: when actively affecting enemies, show inner distortion ring
+    if (hasTargets && Math.random() < 0.05) {
+      const innerRing = this.scene.add
+        .circle(tower.worldX, tower.worldY, range * 0.3, 0x9933ff, 0)
+        .setStrokeStyle(2, 0x9933ff, 0.5)
+        .setDepth(19);
+      this.scene.tweens.add({
+        targets: innerRing,
+        scale: range / (range * 0.3),
+        alpha: 0,
+        duration: 600,
+        ease: 'Cubic.easeOut',
+        onComplete: () => innerRing.destroy(),
+      });
     }
   }
 
