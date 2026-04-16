@@ -5,6 +5,8 @@ import {
   UpgradeConfig,
   GAME_WIDTH,
   GAME_HEIGHT,
+  TowerConfig,
+  ProjectileType,
 } from '../types';
 import { GameMap } from '../map/GameMap';
 import { TEST_MAP } from '../data/maps';
@@ -56,6 +58,18 @@ export class GameScene extends Phaser.Scene {
   // Task 2: Wave preview panel
   private wavePreviewContainer: Phaser.GameObjects.Container | null = null;
 
+  // Task 5: Game speed toggle (1x / 2x / 3x)
+  private gameSpeed: number = 1;
+  private speedButton: Phaser.GameObjects.Rectangle | null = null;
+  private speedLabel: Phaser.GameObjects.Text | null = null;
+
+  // Task 4: Tower tooltip elements
+  private tooltipContainer: Phaser.GameObjects.Container | null = null;
+  private hoveredTowerPanelId: string | null = null;
+  private hoveredPlacedTower: Tower | null = null;
+  private towerHoverHandler!: (tower: Tower) => void;
+  private towerHoverEndHandler!: (tower: Tower) => void;
+
   private tileClickHandler!: (
     pos: { col: number; row: number },
     type: TileType,
@@ -83,7 +97,11 @@ export class GameScene extends Phaser.Scene {
       rangeModifier: 0,
       armorPiercing: 0,
       salvageModifier: 0,
+      towerDiscount: 0,
+      extraEnergy: 0,
+      bossSalvageBonus: 0,
     };
+    this.gameSpeed = 1;
 
     this.selectedTowerId = null;
     this.placementPreview = null;
@@ -134,6 +152,8 @@ export class GameScene extends Phaser.Scene {
     };
     this.waveCompleteHandler = (waveIndex: number) => {
       this.updateStartWaveButton(true);
+      // Task 5: reset speed to 1x and hide toggle between waves
+      this.resetGameSpeed();
       this.showWaveCompleteBanner(waveIndex);
 
       // Apply reactor regen if upgrade is active
@@ -168,6 +188,20 @@ export class GameScene extends Phaser.Scene {
     this.events.on('tileHover', this.tileHoverHandler);
     this.events.on('waveComplete', this.waveCompleteHandler);
 
+    // Task 4: Tower hover tooltip handlers (emitted by Tower hitArea)
+    this.towerHoverHandler = (tower: Tower) => {
+      this.hoveredPlacedTower = tower;
+      this.showPlacedTowerTooltip(tower);
+    };
+    this.towerHoverEndHandler = (tower: Tower) => {
+      if (this.hoveredPlacedTower === tower) {
+        this.hoveredPlacedTower = null;
+        this.hideTooltip();
+      }
+    };
+    this.events.on('towerHover', this.towerHoverHandler);
+    this.events.on('towerHoverEnd', this.towerHoverEndHandler);
+
     // Escape key to deselect tower
     this.input.keyboard?.on('keydown-ESC', () => {
       if (this.selectedTower) {
@@ -183,21 +217,36 @@ export class GameScene extends Phaser.Scene {
     this.events.off('tileClicked', this.tileClickHandler);
     this.events.off('tileHover', this.tileHoverHandler);
     this.events.off('waveComplete', this.waveCompleteHandler);
+    this.events.off('towerHover', this.towerHoverHandler);
+    this.events.off('towerHoverEnd', this.towerHoverEndHandler);
     this.waveManager.cleanup();
     this.combatSystem.cleanup();
   }
 
   update(time: number, delta: number): void {
-    this.waveManager.update(delta);
+    // Task 5: scale simulation delta by current game speed. Phaser's
+    // time.timeScale additionally drives delayedCall-based timers (spawn
+    // timers, banners, etc.) so they also scale.
+    const scaledDelta = delta * this.gameSpeed;
+    this.waveManager.update(scaledDelta);
 
     const enemies = this.waveManager.activeEnemies;
-    this.combatSystem.update(time, delta, enemies as Enemy[], this.gameState);
+    this.combatSystem.update(
+      time,
+      scaledDelta,
+      enemies as Enemy[],
+      this.gameState,
+    );
 
     // Harvest killed enemies for rewards
     const killed = this.waveManager.harvestKilledEnemies();
     for (const enemy of killed) {
       const salvageMult = 1 + this.gameState.salvageModifier;
-      const reward = Math.round(enemy.config.salvageReward * salvageMult);
+      let reward = Math.round(enemy.config.salvageReward * salvageMult);
+      // Task 2: flat bonus on boss kill if Scavenger Protocol is active
+      if (enemy.isBoss && this.gameState.bossSalvageBonus > 0) {
+        reward += this.gameState.bossSalvageBonus;
+      }
       this.gameState.energy += reward;
       this.gameState.score += reward;
     }
@@ -288,6 +337,9 @@ export class GameScene extends Phaser.Scene {
         this.waveManager.startNextWave();
         this.gameState.currentWave = this.waveManager.currentWave;
         this.updateStartWaveButton(false);
+        // Task 5: reset speed to 1x at start of each wave and show toggle
+        this.resetGameSpeed();
+        this.updateSpeedButtonVisibility();
       }
     });
 
@@ -330,7 +382,77 @@ export class GameScene extends Phaser.Scene {
     endRunBtn.on('pointerover', () => endRunBtn.setFillStyle(0x880000));
     endRunBtn.on('pointerout', () => endRunBtn.setFillStyle(0x660000));
 
+    // Task 5: Speed toggle button (1x / 2x / 3x). Sits to the right of the
+    // START WAVE button so it's clearly visible in the HUD during gameplay.
+    this.speedButton = this.add
+      .rectangle(GAME_WIDTH / 2 + 160, GAME_HEIGHT - 40, 80, 44, 0x114466)
+      .setStrokeStyle(2, 0x4488cc)
+      .setInteractive({ useHandCursor: true })
+      .setDepth(50);
+    this.speedLabel = this.add
+      .text(GAME_WIDTH / 2 + 160, GAME_HEIGHT - 40, '1x', {
+        fontSize: '20px',
+        color: '#88ccff',
+        fontFamily: 'monospace',
+        fontStyle: 'bold',
+      })
+      .setOrigin(0.5)
+      .setDepth(51);
+
+    this.speedButton.on('pointerdown', () => {
+      if (!this.waveManager.isWaveInProgress) return;
+      this.cycleGameSpeed();
+    });
+    this.speedButton.on('pointerover', () => {
+      if (this.waveManager.isWaveInProgress) {
+        this.speedButton?.setFillStyle(0x1a5a88);
+      }
+    });
+    this.speedButton.on('pointerout', () => {
+      if (this.waveManager.isWaveInProgress) {
+        this.speedButton?.setFillStyle(0x114466);
+      }
+    });
+    this.updateSpeedButtonVisibility();
+
     this.updateHUD();
+  }
+
+  // Task 5: Cycle game speed 1x -> 2x -> 3x -> 1x
+  private cycleGameSpeed(): void {
+    this.gameSpeed = this.gameSpeed >= 3 ? 1 : this.gameSpeed + 1;
+    this.applyGameSpeed();
+  }
+
+  private applyGameSpeed(): void {
+    // Scene time scale drives Phaser's delayedCall-based timers (spawn
+    // timers, wave banner dismiss) and scene-level tweens.
+    this.time.timeScale = this.gameSpeed;
+    if (this.speedLabel) {
+      this.speedLabel.setText(`${this.gameSpeed}x`);
+    }
+  }
+
+  private resetGameSpeed(): void {
+    this.gameSpeed = 1;
+    this.applyGameSpeed();
+    this.updateSpeedButtonVisibility();
+  }
+
+  // Hide/disable speed toggle when no wave is in progress.
+  private updateSpeedButtonVisibility(): void {
+    const active = this.waveManager?.isWaveInProgress ?? false;
+    if (!this.speedButton || !this.speedLabel) return;
+    if (active) {
+      this.speedButton.setVisible(true);
+      this.speedLabel.setVisible(true);
+      this.speedButton.setFillStyle(0x114466);
+      this.speedButton.setStrokeStyle(2, 0x4488cc);
+      this.speedLabel.setColor('#88ccff');
+    } else {
+      this.speedButton.setVisible(false);
+      this.speedLabel.setVisible(false);
+    }
   }
 
   private createTowerPanel(): void {
@@ -366,13 +488,27 @@ export class GameScene extends Phaser.Scene {
         fontFamily: 'monospace',
       });
 
-      const costText = this.add.text(28, 22, '$' + config.cost, {
-        fontSize: '12px',
-        color: '#ffcc00',
-        fontFamily: 'monospace',
-      });
+      const costText = this.add
+        .text(28, 22, '$' + this.getDiscountedCost(config.cost), {
+          fontSize: '12px',
+          color: '#ffcc00',
+          fontFamily: 'monospace',
+        })
+        .setName('costText');
 
       container.add([bg, swatch, label, costText]);
+
+      // Task 4: Tower panel hover tooltip
+      bg.on('pointerover', () => {
+        this.hoveredTowerPanelId = id;
+        this.showTowerPanelTooltip(id, panelX + 130, y);
+      });
+      bg.on('pointerout', () => {
+        if (this.hoveredTowerPanelId === id) {
+          this.hoveredTowerPanelId = null;
+          this.hideTooltip();
+        }
+      });
 
       bg.on('pointerdown', () => {
         if (this.selectedTowerId === id) {
@@ -469,7 +605,9 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
-    if (this.gameState.energy < config.cost) {
+    // Task 2: apply tower cost discount when Supply Line Optimization active
+    const effectiveCost = this.getDiscountedCost(config.cost);
+    if (this.gameState.energy < effectiveCost) {
       this.showInvalidFeedback(pos, 'Not enough energy!');
       return;
     }
@@ -489,9 +627,142 @@ export class GameScene extends Phaser.Scene {
     );
 
     this.combatSystem.addTower(tower);
-    this.gameState.energy -= config.cost;
+    this.gameState.energy -= effectiveCost;
     this.gameMap.setTileType(pos.col, pos.row, TileType.TOWER);
     this.clearPlacementPreview();
+  }
+
+  // Task 2: Compute discounted tower cost given the current towerDiscount
+  // modifier. Clamped to a minimum of 1 energy. Rounded for display parity.
+  private getDiscountedCost(baseCost: number): number {
+    const d = Math.max(0, Math.min(1, this.gameState?.towerDiscount ?? 0));
+    return Math.max(1, Math.round(baseCost * (1 - d)));
+  }
+
+  // =====================
+  // Task 4: Tower tooltip system
+  // =====================
+
+  // Shared formatter for tooltip body text. Applies current gameState
+  // modifiers so players see the stats they'll actually get.
+  private formatTowerTooltipLines(config: TowerConfig): string[] {
+    const dmgMod = 1 + (this.gameState?.damageModifier ?? 0);
+    const rangeMod = 1 + (this.gameState?.rangeModifier ?? 0);
+    const fireMod = 1 + (this.gameState?.fireRateModifier ?? 0);
+    const effDamage = Math.round(config.damage * dmgMod);
+    const effRange = Math.round(config.range * rangeMod);
+    // Firing rate: lower fireRate (ms) = faster. Present as shots/sec.
+    const effFireRateMs = config.fireRate / fireMod;
+    const shotsPerSec =
+      effFireRateMs > 0 ? (1000 / effFireRateMs).toFixed(2) : '—';
+    const cost = this.getDiscountedCost(config.cost);
+
+    let damageLine = `Damage: ${effDamage}`;
+    if (config.projectileType === ProjectileType.EMP) {
+      damageLine = 'Damage: 0 (Slow effect)';
+    } else if (config.projectileType === ProjectileType.GRAVITY) {
+      damageLine = `Damage: ${config.damage}/s (Slow zone)`;
+    }
+
+    const lines: string[] = [
+      config.name,
+      config.description,
+      '',
+      damageLine,
+      `Range: ${effRange}`,
+      `Fire rate: ${shotsPerSec}/s`,
+      `Cost: ${cost}⚡`,
+    ];
+    return lines;
+  }
+
+  // Build a freshly-rendered tooltip container at the given anchor (x, y).
+  // Automatically clamps within the game viewport so nothing clips.
+  private buildTooltip(
+    anchorX: number,
+    anchorY: number,
+    lines: string[],
+  ): Phaser.GameObjects.Container {
+    this.hideTooltip();
+    const padding = 8;
+    const lineHeight = 16;
+    const maxLineWidth = 240;
+    const texts: Phaser.GameObjects.Text[] = [];
+    let width = 0;
+    for (let i = 0; i < lines.length; i++) {
+      const isTitle = i === 0;
+      const t = this.add
+        .text(padding, padding + i * lineHeight, lines[i], {
+          fontSize: isTitle ? '14px' : '12px',
+          color: isTitle ? '#00ccff' : '#e0e6f0',
+          fontFamily: 'monospace',
+          fontStyle: isTitle ? 'bold' : 'normal',
+          wordWrap: { width: maxLineWidth },
+        })
+        .setDepth(201);
+      texts.push(t);
+      width = Math.max(width, t.width);
+    }
+    const totalHeight =
+      padding * 2 + Math.max(1, lines.length) * lineHeight - 4;
+    const totalWidth = Math.min(maxLineWidth, width) + padding * 2;
+
+    // Position so that the tooltip avoids the cursor and screen edges
+    let x = anchorX + 12;
+    let y = anchorY + 12;
+    if (x + totalWidth > GAME_WIDTH - 4) x = anchorX - totalWidth - 12;
+    if (y + totalHeight > GAME_HEIGHT - 4) y = anchorY - totalHeight - 12;
+    if (x < 4) x = 4;
+    if (y < 4) y = 4;
+
+    const bg = this.add
+      .rectangle(0, 0, totalWidth, totalHeight, 0x0a0a1a, 0.95)
+      .setOrigin(0, 0)
+      .setStrokeStyle(1, 0x4488cc, 0.9)
+      .setDepth(200);
+
+    const container = this.add.container(x, y, [bg, ...texts]).setDepth(200);
+    this.tooltipContainer = container;
+    return container;
+  }
+
+  private showTowerPanelTooltip(
+    towerId: string,
+    anchorX: number,
+    anchorY: number,
+  ): void {
+    const config = TOWER_CONFIGS[towerId];
+    if (!config) return;
+    const lines = this.formatTowerTooltipLines(config);
+    this.buildTooltip(anchorX, anchorY, lines);
+  }
+
+  private showPlacedTowerTooltip(tower: Tower): void {
+    const lines = this.formatTowerTooltipLines(tower.config);
+    this.buildTooltip(tower.worldX, tower.worldY, lines);
+  }
+
+  private hideTooltip(): void {
+    if (this.tooltipContainer) {
+      this.tooltipContainer.destroy();
+      this.tooltipContainer = null;
+    }
+  }
+
+  // Refresh displayed tower panel costs after upgrades change the discount.
+  private refreshTowerPanelCosts(): void {
+    const towerIds = Object.keys(TOWER_CONFIGS);
+    towerIds.forEach((id, index) => {
+      const container = this.towerButtons[index];
+      if (!container) return;
+      const costText = container.getByName(
+        'costText',
+      ) as Phaser.GameObjects.Text | null;
+      if (costText) {
+        const config = TOWER_CONFIGS[id];
+        costText.setText('$' + this.getDiscountedCost(config.cost));
+      }
+    });
   }
 
   private handleTileHover(pos: { col: number; row: number }): void {
@@ -913,11 +1184,18 @@ export class GameScene extends Phaser.Scene {
         this.gameState.salvageModifier += upgrade.effect.value;
         break;
       case 'extraEnergy':
+        // Task 2: add to tracked field and grant energy immediately
+        this.gameState.extraEnergy += upgrade.effect.value;
         this.gameState.energy += upgrade.effect.value;
         break;
       case 'towerDiscount':
-        // Applied as stat modifier; tower cost check can use this
-        this.gameState.energy += 30;
+        // Task 2: tower-cost discount applied at purchase time
+        this.gameState.towerDiscount += upgrade.effect.value;
+        this.refreshTowerPanelCosts();
+        break;
+      case 'bossSalvage':
+        // Task 2: flat bonus applied when the boss is killed
+        this.gameState.bossSalvageBonus += upgrade.effect.value;
         break;
       case 'reactorRegen':
         // Effect applied at wave completion via waveCompleteHandler

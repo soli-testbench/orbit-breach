@@ -45,7 +45,7 @@ export const UPGRADE_POOL: UpgradeConfig[] = [
   {
     id: 'chain_lightning',
     name: 'Chain Lightning',
-    description: '+10% chance for attacks to chain',
+    description: '+10% tower damage',
     rarity: 'uncommon',
     effect: { stat: 'damage', value: 0.1 },
     stackable: true,
@@ -53,7 +53,7 @@ export const UPGRADE_POOL: UpgradeConfig[] = [
   {
     id: 'critical_hit',
     name: 'Critical Targeting',
-    description: '+12% critical hit chance bonus',
+    description: '+12% tower damage',
     rarity: 'uncommon',
     effect: { stat: 'damage', value: 0.12 },
     stackable: true,
@@ -61,7 +61,7 @@ export const UPGRADE_POOL: UpgradeConfig[] = [
   {
     id: 'splash_radius',
     name: 'Blast Radius Amplifier',
-    description: '+10% splash radius for all towers',
+    description: '+10% tower range',
     rarity: 'common',
     effect: { stat: 'range', value: 0.1 },
     stackable: true,
@@ -69,7 +69,7 @@ export const UPGRADE_POOL: UpgradeConfig[] = [
   {
     id: 'slow_on_hit',
     name: 'Cryo Coating',
-    description: '+8% slow effect on all attacks',
+    description: '+8% fire rate',
     rarity: 'uncommon',
     effect: { stat: 'fireRate', value: 0.08 },
     stackable: true,
@@ -94,7 +94,7 @@ export const UPGRADE_POOL: UpgradeConfig[] = [
   {
     id: 'extra_energy',
     name: 'Power Surge',
-    description: '+50 starting energy for placed towers',
+    description: '+50 energy (instant)',
     rarity: 'rare',
     effect: { stat: 'extraEnergy', value: 50 },
     stackable: false,
@@ -120,7 +120,7 @@ export const UPGRADE_POOL: UpgradeConfig[] = [
     name: 'Scavenger Protocol',
     description: '+100 bonus salvage on boss kill',
     rarity: 'rare',
-    effect: { stat: 'salvage', value: 0.5 },
+    effect: { stat: 'bossSalvage', value: 100 },
     stackable: false,
   },
   {
